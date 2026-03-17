@@ -16,6 +16,8 @@ STRATEGY_CAPS = {
     "intraday": 0.03,
 }
 
+ROLLING_WINDOW = 100
+
 
 def compute_adaptive_kelly(
     strategy: str,
@@ -25,6 +27,8 @@ def compute_adaptive_kelly(
     portfolio_correlation: float = 0.0,
 ) -> dict:
     """Compute regime-aware, vol-adjusted Kelly fraction."""
+    # Cap to most recent 100 trades per spec
+    trailing_trades = trailing_trades[-ROLLING_WINDOW:]
     regime_trades = [t for t in trailing_trades if t.get("regime") == regime]
 
     if len(regime_trades) < 20:

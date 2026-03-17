@@ -13,6 +13,8 @@ def get_adaptive_risk_limits(vol: VolContext) -> dict:
     return {
         "max_position_pct": round(0.08 * ps, 3),
         "max_gross_exposure": round(min(2.5, 2.0 * ps), 2),
+        "max_net_exposure_long": 0.80,
+        "max_net_exposure_short": -0.30,
         "reduce_at_drawdown_pct": round(-0.10 * min(1.0, ps), 3),
         "flatten_at_drawdown_pct": round(-0.15 * min(1.0, ps), 3),
         "daily_var_limit_pct": round(0.02 * ps, 3),

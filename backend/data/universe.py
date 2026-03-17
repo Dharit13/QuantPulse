@@ -53,6 +53,20 @@ def get_sub_industry_groups() -> dict[str, list[str]]:
     return {k: v for k, v in groups.items() if len(v) >= 2}
 
 
+def get_ticker_sector(ticker: str) -> str:
+    """Look up a ticker's GICS sector from the S&P 500 universe.
+
+    Returns the sector name (e.g. "Information Technology") or "Unknown".
+    """
+    df = fetch_sp500_constituents()
+    if df.empty:
+        return "Unknown"
+    match = df.loc[df["ticker"] == ticker.upper(), "sector"]
+    if match.empty:
+        return "Unknown"
+    return str(match.iloc[0])
+
+
 def get_all_tickers() -> list[str]:
     df = fetch_sp500_constituents()
     return df["ticker"].tolist()

@@ -150,7 +150,7 @@ class GapReversionStrategy(BaseStrategy):
             return None
 
         historical_fill_rate = self._compute_historical_gap_fill_rate(df, params)
-        if historical_fill_rate < 0.55:
+        if historical_fill_rate < 0.60:
             return None
 
         # Gap UP → short (bet on fill); Gap DOWN → long
