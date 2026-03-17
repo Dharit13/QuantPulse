@@ -50,7 +50,7 @@ class FMPSource:
     def _get(self, path: str, params: dict | None = None) -> list | dict:
         """Rate-limited GET with api key injection. Returns parsed JSON.
 
-        Handles 402/403 (paid-only endpoints) gracefully without logging errors.
+        Handles 402/403 (paid-only) and 429 (rate-limited) gracefully.
         """
         params = dict(params or {})
         params["apikey"] = self._api_key
@@ -66,6 +66,9 @@ class FMPSource:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (402, 403):
                 logger.debug("FMP %s requires paid plan (HTTP %d)", path, exc.response.status_code)
+                return []
+            if exc.response.status_code == 429:
+                logger.warning("FMP %s rate-limited after retries, falling back to yfinance", path)
                 return []
             raise
 
