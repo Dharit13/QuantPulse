@@ -21,7 +21,13 @@ logger = logging.getLogger(__name__)
 class SignalAuditor:
     """Records and queries the audit trail for signals and trade decisions."""
 
-    def log_signal(self, signal: TradeSignal, acted_on: bool = False) -> int:
+    def log_signal(
+        self,
+        signal: TradeSignal,
+        acted_on: bool = False,
+        regime: str | None = None,
+        vix: float | None = None,
+    ) -> int:
         """Persist a generated signal for the audit trail. Returns signal id."""
         with SessionLocal() as db:
             record = SignalRecord(
@@ -38,6 +44,9 @@ class SignalAuditor:
                 edge_reason=signal.edge_reason,
                 kill_condition=signal.kill_condition,
                 acted_on=acted_on,
+                regime=regime,
+                vix_at_signal=vix,
+                max_hold_days=signal.max_hold_days,
             )
             db.add(record)
             db.commit()
