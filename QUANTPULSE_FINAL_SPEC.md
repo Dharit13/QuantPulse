@@ -1,6 +1,6 @@
 # CLAUDE.md — QuantPulse v2: Institutional-Grade Alpha Engine
 
-> **Ambition**: 50%+ annual return target. This is not a retail screener — it is a multi-strategy quantitative trading system that thinks in terms of edge, expected value, regime awareness, and capital efficiency.
+> **Ambition**: Risk-adjusted alpha with portfolio Sharpe > 1.5, max drawdown < 15%, and positive net returns after transaction costs across all regimes. This is not a retail screener — it is a multi-strategy quantitative trading system that thinks in terms of edge, expected value, regime awareness, and capital efficiency.
 > **Philosophy**: Jane Street doesn't use RSI. They find **structural edges** — mispricings that exist for a mathematical reason, not a pattern-matching reason. Every signal in this system must answer: **why does this edge exist, and why hasn't it been arbitraged away?**
 > **Owner**: Dharit — Senior Data Scientist, strong Python/ML, production systems experience
 > **Stack**: Python (FastAPI) + Streamlit (MVP) + PostgreSQL (production) / SQLite (dev)
@@ -69,23 +69,28 @@ Before adding ANY signal to the system, it must pass this test:
 
 If you can't answer all three, the signal is noise.
 
-### Return Decomposition Target
+### Risk-Adjusted Performance Targets
+
+The primary design constraints are risk-adjusted, not return-maximizing:
+
+- **Portfolio Sharpe ratio > 1.5** (annualized, after costs)
+- **Maximum drawdown < 15%** from peak equity
+- **Positive net returns after transaction costs** across all regime types
+- **Per-strategy Sharpe > 1.0** out-of-sample in walk-forward validation
+- **Stable performance across regimes** — no strategy contributes > 40% of total P&L
 
 ```
-Target annual return: 50%+
-Decomposition:
-├── Strategy 1: Stat Arb (pairs/baskets)      →  8-15% contribution
-├── Strategy 2: Catalyst/Event Trading         → 10-18% contribution
-├── Strategy 3: Cross-Asset Regime Momentum    →  8-12% contribution
-├── Strategy 4: Microstructure/Flow Imbalance  →  5-10% contribution
-├── Strategy 5: Overnight Gap / Intra-day MR   →  5-10% contribution
-├── Kelly Sizing Alpha (vs equal sizing)       →  5-8% boost
-└── Regime Timing Alpha (avoiding drawdowns)   →  3-5% saved
-                                         Total → ~50-70% gross
-                                  Minus costs  → ~45-55% net
+Strategy contribution targets (aspirational):
+├── Strategy 1: Stat Arb (pairs/baskets)      — core alpha engine
+├── Strategy 2: Catalyst/Event Trading         — core alpha engine
+├── Strategy 3: Cross-Asset Regime Signals     — allocation overlay
+├── Strategy 4: Microstructure/Flow Imbalance  — confirmation signal
+├── Strategy 5: Overnight Gap Mean Reversion   — specialist module
+├── Kelly Sizing Alpha (vs equal sizing)       — capital efficiency
+└── Regime Timing Alpha (avoiding drawdowns)   — drawdown reduction
 ```
 
-No single strategy carries the target. Diversification across uncorrelated alpha streams is the path.
+No single strategy carries the system. Diversification across uncorrelated alpha streams is the path. Gross return targets (e.g., 50%+) are stretch aspirations — the system is designed to survive and compound, not to chase a number that incentivizes overfitting.
 
 ### Capital Allocation by Regime
 

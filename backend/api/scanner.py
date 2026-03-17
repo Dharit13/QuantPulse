@@ -3,6 +3,9 @@
 The scan runs strategies in a background thread to avoid blocking the
 async event loop.  Catalyst and cross-asset scans are limited to a
 manageable ticker subset so the endpoint responds in <30 seconds.
+
+Every signal generated is automatically logged to the signal audit trail
+and created as a phantom trade for shadow-book tracking.
 """
 
 from __future__ import annotations
@@ -20,11 +23,13 @@ from backend.data.cache import data_cache
 from backend.data.fetcher import DataFetcher
 from backend.models.schemas import Regime, ScannerResult, StrategyName, TradeSignal
 from backend.regime.detector import detect_regime
+from backend.tracker.signal_audit import SignalAuditor
 
 router = APIRouter(prefix="/scan", tags=["scanner"])
 logger = logging.getLogger(__name__)
 _fetcher = DataFetcher()
 _executor = ThreadPoolExecutor(max_workers=2)
+_auditor = SignalAuditor()
 
 SCAN_WATCHLIST = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
@@ -34,6 +39,33 @@ SCAN_WATCHLIST = [
     "UPS", "RTX", "LOW", "HON", "IBM", "GS", "CAT", "BA", "AMGN",
     "AMD", "INTC", "QCOM", "AMAT", "ADI",
 ]
+
+
+def _log_signals_to_shadow_book(signals: list[TradeSignal]) -> None:
+    """Auto-log every signal to the audit trail and create phantom entries."""
+    from datetime import date as date_type
+
+    from backend.models.schemas import PhantomTrade
+    from backend.tracker.trade_journal import TradeJournal
+
+    journal = TradeJournal()
+    for sig in signals:
+        try:
+            _auditor.log_signal(sig, acted_on=False)
+            phantom = PhantomTrade(
+                ticker=sig.ticker,
+                direction=sig.direction,
+                strategy=sig.strategy,
+                signal_score=sig.signal_score,
+                signal_date=date_type.today(),
+                entry_price_suggested=sig.entry_price,
+                stop_suggested=sig.stop_loss,
+                target_suggested=sig.target,
+                pass_reason="auto-logged (advisory mode)",
+            )
+            journal.log_phantom(phantom)
+        except Exception:
+            logger.debug("Failed to shadow-log signal for %s", sig.ticker)
 
 
 def _run_scan(vol: VolContext, regime: Regime) -> list[TradeSignal]:
@@ -123,6 +155,9 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
 
         all_signals = _run_scan(vol, regime)
         _scanner_state["progress"] = 2
+
+        # Auto-log all signals to shadow book before filtering
+        _log_signals_to_shadow_book(all_signals)
 
         filtered = [s for s in all_signals if s.signal_score >= min_score]
         filtered.sort(key=lambda s: s.conviction, reverse=True)
