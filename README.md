@@ -6,7 +6,7 @@ QuantPulse is a signal-generation and decision-support system for quantitative e
 
 Most retail trading tools rely on indicators like RSI, MACD, and Bollinger Bands. These signals have zero alpha — everyone computes the same thing, so there is no informational edge. Institutions don't trade this way. They find **structural edges**: mispricings that exist for a mathematical reason (behavioral bias, information lag, mechanical flow, regulatory constraint) and persist because of capacity constraints or execution difficulty.
 
-QuantPulse targets **risk-adjusted alpha** — portfolio Sharpe > 1.5, max drawdown < 15%, positive net returns after transaction costs across all regimes. It combines five independent, uncorrelated strategies, each with a documented structural reason for why the edge exists. No single strategy carries the system. The return comes from diversification across alpha streams, regime-aware capital allocation, and conservative position sizing that scales with validated edge strength.
+QuantPulse targets **risk-adjusted alpha** — portfolio Sharpe > 1.5, max drawdown < 15%, positive net returns after transaction costs over full evaluation cycles, with controlled drawdowns and explicit regime-aware de-risking in unfavorable environments. It combines multiple complementary signal engines: two core alpha strategies, one specialist tactical module, and two overlay/confirmation layers — each with a documented structural reason for why the edge exists. No single strategy carries the system. The return comes from diversification across complementary alpha streams, regime-aware capital allocation, and conservative position sizing that scales with validated edge strength.
 
 Every signal in the system must answer three questions before it's allowed in:
 
@@ -14,7 +14,7 @@ Every signal in the system must answer three questions before it's allowed in:
 2. **Why hasn't it been arbitraged away?** (capacity constraint, holding period, execution difficulty)
 3. **What kills this edge?** (regime change, crowding, data disappearing)
 
-## The five strategies
+## Signal engines
 
 ### Strategy 1: Statistical Arbitrage (Pairs/Baskets) — core alpha
 
@@ -36,9 +36,9 @@ When institutions need to move large blocks, they create temporary supply/demand
 
 Overnight gaps are driven by futures and pre-market trading with thin liquidity. Gaps between 1-5% revert 60-65% of the time within the first 90 minutes of regular trading. We filter for non-catalyst gaps (earnings-driven gaps are continuation, not reversion), require historical fill rates above 60% per ticker, and gate on VIX < 30 (high-vol environments trend instead of reverting). The edge is structural: the liquidity differential between overnight and intraday sessions creates systematic overreaction.
 
-## Level 8 signal cards
+## Evidence-enriched signal cards
 
-Every signal goes through a three-layer enrichment pipeline before reaching the user. The system doesn't just say "this looks like a good trade" — it proves tradability, cites shadow evidence, and monitors strategy health.
+Every signal goes through a three-layer enrichment pipeline before reaching the user. The system doesn't just say "this looks like a good trade" — it proves tradability, cites shadow evidence, and monitors strategy health. The enrichment framework is implemented; the evidence layer reaches full maturity once 90+ days of phantom history accumulate per active strategy.
 
 ```
 Strategy generates TradeSignal
@@ -112,11 +112,11 @@ A signal card includes:
               to Human Dashboard
 ```
 
-The **Regime Detection Engine** classifies the market into one of five states (bull trending, bull choppy, bear trending, crisis, mean-reverting) using four indicator pillars. The regime determines how much capital each strategy receives — momentum gets 35% in a bull trend but 5% in crisis, while cash goes from 5% to 70%.
+The **Regime Detection Engine** classifies the market into one of five states (bull trending, bull choppy, bear trending, crisis, mean-reverting) using four indicator pillars. The regime determines how much capital each strategy receives — core alpha strategies receive larger allocations in favorable regimes, while specialist and tactical modules are reduced or disabled in crisis conditions, with cash allocation rising from 5% to 70%.
 
 **Position Sizing** defaults to quarter-Kelly (conservative) until strategies are validated through paper trading. After 6+ months of shadow-book evidence, it can be upgraded to half-Kelly. It recalibrates from a rolling 100-trade window and is capped per-strategy to prevent concentration. An equal-risk budgeting mode is also available for maximum conservatism.
 
-**Risk Management** runs four layers of checks before every trade: position limits (8% max), strategy circuit breakers (pause at -5% drawdown, shutdown at -10%), portfolio limits (gross exposure, net exposure, sector concentration, VaR, correlation, drawdown), and tail hedging (VIX calls + SPY puts for black swan protection).
+**Risk Management** runs four layers of checks before every trade: position limits (8% max), strategy circuit breakers (pause at -5% drawdown, shutdown at -10%), portfolio limits (gross exposure, net exposure, sector concentration, VaR, correlation, drawdown), and optional tail-risk overlays that may be activated in stress regimes subject to carry-cost constraints.
 
 **Shadow Book** automatically logs every generated signal and creates phantom trades. The daily scheduler tracks what would have happened (stop hit, target hit, or timed out). This builds the evidence base needed to validate edges before increasing sizing, and feeds directly into the shadow evidence and strategy health modules.
 
@@ -133,5 +133,6 @@ The **Regime Detection Engine** classifies the market into one of five states (b
 - **Frontend**: Streamlit
 - **Data**: yfinance (free), FMP, SteadyAPI, FINRA ATS, SEC EDGAR (paid sources feature-flagged)
 - **Database**: SQLite (dev) / PostgreSQL (prod)
-- **Scan universe**: Dynamic S&P 500 from Wikipedia (cached weekly), no hardcoded watchlists
+- **Live scan universe**: Dynamic S&P 500 from Wikipedia (cached weekly), no hardcoded watchlists
+- **Backtest universe**: Must use point-in-time membership snapshots to avoid survivorship bias (live scan universe is NOT safe for backtesting)
 - **No broker integration**: advisory only, human executes trades
