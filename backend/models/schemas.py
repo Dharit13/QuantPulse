@@ -164,3 +164,81 @@ class PerformanceStats(BaseModel):
     sharpe_ratio: float
     max_drawdown_pct: float
     strategy_breakdown: dict[str, dict]
+
+
+# ── Backtest Models ──
+
+
+class BacktestConfig(BaseModel):
+    train_days: int = 504
+    test_days: int = 126
+    initial_capital: float = 100_000.0
+    commission_per_share: float = 0.005
+    slippage_pct: float = 0.0005
+    short_borrow_rate: float = 0.005
+    risk_free_rate: float = 0.05
+
+
+class BacktestTrade(BaseModel):
+    ticker: str
+    direction: Literal["long", "short"]
+    strategy: StrategyName
+    entry_date: date
+    entry_price: float
+    exit_date: date
+    exit_price: float
+    shares: int
+    position_size_pct: float
+    pnl_dollars: float
+    pnl_pct: float
+    hold_days: int
+    exit_reason: str
+    conviction: float
+    signal_score: float
+
+
+class BacktestResult(BaseModel):
+    strategy: StrategyName
+    config: BacktestConfig
+    total_return_pct: float
+    cagr_pct: float
+    sharpe_ratio: float
+    sortino_ratio: float
+    win_rate: float
+    avg_win_pct: float
+    avg_loss_pct: float
+    profit_factor: float
+    max_drawdown_pct: float
+    total_trades: int
+    avg_hold_days: float
+    equity_curve: list[dict]
+    trades: list[BacktestTrade]
+    monthly_returns: list[dict]
+    regime_performance: dict[str, dict]
+    validation: dict
+    run_timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Signal Sub-Models ──
+
+
+class EarningsSignal(BaseModel):
+    ticker: str
+    report_date: date
+    eps_actual: float
+    eps_estimate: float
+    surprise_pct: float
+    earnings_day_gap_pct: float
+    revision_trend_pre: float = 0.0
+    guidance_raised: bool = False
+    historical_drift_avg: float = 0.0
+    composite_score: float = 0.0
+
+
+class RevisionSignal(BaseModel):
+    ticker: str
+    as_of_date: date
+    breadth_30d: float
+    acceleration_15d: float
+    price_moved_pct: float
+    composite_score: float = 0.0

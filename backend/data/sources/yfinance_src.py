@@ -115,5 +115,111 @@ class YFinanceSource:
             logger.exception("Failed to get earnings dates for %s", ticker)
             return pd.DataFrame()
 
+    def get_earnings_history(self, ticker: str) -> list[dict]:
+        """Return recent quarterly EPS actual vs estimate with surprise %.
+
+        Each dict: {date, eps_actual, eps_estimate, surprise_pct, revenue_surprise_pct}
+        Falls back gracefully if yfinance doesn't have the data.
+        """
+        try:
+            t = yf.Ticker(ticker)
+            df = t.earnings_dates
+            if df is None or df.empty:
+                return []
+
+            records: list[dict] = []
+            for idx, row in df.iterrows():
+                actual = row.get("Reported EPS")
+                estimate = row.get("EPS Estimate")
+                if pd.isna(actual) or pd.isna(estimate):
+                    continue
+
+                surprise_pct = (
+                    (actual - estimate) / abs(estimate) * 100
+                    if estimate != 0
+                    else 0.0
+                )
+                report_date = idx.date() if hasattr(idx, "date") else idx
+
+                records.append({
+                    "date": report_date,
+                    "eps_actual": float(actual),
+                    "eps_estimate": float(estimate),
+                    "surprise_pct": round(float(surprise_pct), 2),
+                })
+
+            # Only return past earnings (not future estimates)
+            today = datetime.now().date()
+            records = [r for r in records if r["date"] <= today]
+            records.sort(key=lambda r: r["date"], reverse=True)
+            return records[:12]
+        except Exception:
+            logger.exception("Failed to get earnings history for %s", ticker)
+            return []
+
+    def get_recommendation_trends(self, ticker: str) -> list[dict]:
+        """Return analyst recommendation trends (upgrades, downgrades, etc).
+
+        Each dict: {date, strong_buy, buy, hold, sell, strong_sell}
+        """
+        try:
+            t = yf.Ticker(ticker)
+            recs = t.recommendations
+            if recs is None or recs.empty:
+                return []
+
+            records: list[dict] = []
+            for idx, row in recs.iterrows():
+                rec_date = idx.date() if hasattr(idx, "date") else idx
+                records.append({
+                    "date": rec_date,
+                    "strong_buy": int(row.get("strongBuy", row.get("To Grade", 0)) or 0)
+                    if "strongBuy" in row.index
+                    else 0,
+                    "buy": int(row.get("buy", 0) or 0) if "buy" in row.index else 0,
+                    "hold": int(row.get("hold", 0) or 0) if "hold" in row.index else 0,
+                    "sell": int(row.get("sell", 0) or 0) if "sell" in row.index else 0,
+                    "strong_sell": int(row.get("strongSell", 0) or 0)
+                    if "strongSell" in row.index
+                    else 0,
+                })
+
+            records.sort(key=lambda r: r["date"], reverse=True)
+            return records[:24]
+        except Exception:
+            logger.exception("Failed to get recommendation trends for %s", ticker)
+            return []
+
+    def get_earnings_day_return(self, ticker: str, earnings_date: str) -> float | None:
+        """Get the single-day return on an earnings date (gap + intraday).
+
+        Returns the close-to-close return as a percentage.
+        """
+        try:
+            t = yf.Ticker(ticker)
+            start = pd.Timestamp(earnings_date) - timedelta(days=5)
+            end = pd.Timestamp(earnings_date) + timedelta(days=3)
+            df = t.history(start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d"))
+            if df.empty or len(df) < 2:
+                return None
+
+            target = pd.Timestamp(earnings_date)
+            if target in df.index:
+                idx = df.index.get_loc(target)
+            else:
+                idx = df.index.searchsorted(target)
+                if idx >= len(df):
+                    return None
+
+            if idx < 1:
+                return None
+
+            prev_close = float(df["Close"].iloc[idx - 1])
+            earn_close = float(df["Close"].iloc[idx])
+            return round((earn_close - prev_close) / prev_close * 100, 2) if prev_close > 0 else None
+        except Exception:
+            logger.exception("Failed to get earnings day return for %s", ticker)
+            return None
+
 
 yfinance_source = YFinanceSource()
