@@ -9,9 +9,14 @@ Layer 4: Black swan protection (tail hedges)
 import logging
 from datetime import datetime, timedelta
 
+import numpy as np
+import pandas as pd
+
 from backend.adaptive.risk_scaling import get_adaptive_risk_limits
 from backend.adaptive.vol_context import VolContext
+from backend.data.universe import get_ticker_sector
 from backend.models.schemas import TradeSignal
+from backend.risk.var import compute_historical_var
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,7 @@ class RiskManager:
         self.current_capital = initial_capital
         self.strategy_drawdowns: dict[str, float] = {}
         self.strategy_pause_until: dict[str, datetime] = {}
+        self.portfolio_daily_returns: list[float] = []
 
     def check_trade(
         self,
@@ -65,17 +71,48 @@ class RiskManager:
             adjusted_size = max(0, limits["max_gross_exposure"] - current_gross)
             reasons.append(f"Gross exposure capped at {limits['max_gross_exposure']:.0%}")
 
-        # Sector check
-        ticker_sector = signal.ticker[:3]  # Simplified; real impl uses GICS mapping
+        # Net exposure check: +80% long max, -30% short max
+        long_exp = sum(
+            t.kelly_size_pct / 100
+            for t in active_trades
+            if t.direction == "long"
+        )
+        short_exp = sum(
+            t.kelly_size_pct / 100
+            for t in active_trades
+            if t.direction == "short"
+        )
+        if signal.direction == "long":
+            new_net = (long_exp + adjusted_size) - short_exp
+            if new_net > limits["max_net_exposure_long"]:
+                adjusted_size = max(0, limits["max_net_exposure_long"] + short_exp - long_exp)
+                reasons.append(f"Net long exposure capped at {limits['max_net_exposure_long']:.0%}")
+        else:
+            new_net = long_exp - (short_exp + adjusted_size)
+            if new_net < limits["max_net_exposure_short"]:
+                adjusted_size = max(0, long_exp - short_exp - limits["max_net_exposure_short"])
+                reasons.append(f"Net short exposure capped at {limits['max_net_exposure_short']:.0%}")
+
+        # Sector check (GICS sector mapping)
+        ticker_sector = get_ticker_sector(signal.ticker)
         sector_exp = sector_exposures.get(ticker_sector, 0.0)
         if sector_exp + adjusted_size > limits["max_sector_pct"]:
             adjusted_size = max(0, limits["max_sector_pct"] - sector_exp)
-            reasons.append(f"Sector exposure capped at {limits['max_sector_pct']:.0%}")
+            reasons.append(f"Sector {ticker_sector} exposure capped at {limits['max_sector_pct']:.0%}")
 
         # Correlation check
         if portfolio_correlation > limits["max_position_correlation"]:
             adjusted_size *= 0.5
             reasons.append(f"Position halved due to high portfolio correlation ({portfolio_correlation:.2f})")
+
+        # Daily VaR check (95% confidence, limit = 2% of capital scaled by vol)
+        var_result = self._check_var_limit(limits)
+        if var_result["breaches_limit"]:
+            adjusted_size *= 0.5
+            reasons.append(
+                f"VaR breach: daily 95% VaR = {var_result['current_var']:.2%} "
+                f"exceeds {limits['daily_var_limit_pct']:.2%} limit — position halved"
+            )
 
         # Drawdown check
         current_dd = self._compute_drawdown()
@@ -87,7 +124,7 @@ class RiskManager:
             adjusted_size *= 0.3
             reasons.append(f"Position reduced 70% — drawdown at {current_dd:.1%}")
 
-        approved = adjusted_size > 0.001  # At least 0.1% of capital
+        approved = adjusted_size > 0.001
 
         if not reasons:
             reasons.append("All risk checks passed")
@@ -99,6 +136,26 @@ class RiskManager:
             "original_size": signal.kelly_size_pct / 100,
             "risk_limits": limits,
         }
+
+    def _check_var_limit(self, limits: dict) -> dict:
+        """Check if portfolio daily VaR exceeds the limit."""
+        if len(self.portfolio_daily_returns) < 20:
+            return {"breaches_limit": False, "current_var": 0.0}
+
+        returns = np.array(self.portfolio_daily_returns[-252:])
+        var_result = compute_historical_var(returns, confidence=0.95)
+        current_var = abs(var_result["var"])
+        var_limit = limits["daily_var_limit_pct"]
+
+        return {
+            "breaches_limit": current_var > var_limit,
+            "current_var": current_var,
+            "var_limit": var_limit,
+        }
+
+    def record_daily_return(self, daily_return: float) -> None:
+        """Record a portfolio daily return for VaR computation."""
+        self.portfolio_daily_returns.append(daily_return)
 
     def update_capital(self, new_capital: float) -> None:
         self.current_capital = new_capital

@@ -34,6 +34,7 @@ class MacroSignalType(str, Enum):
     COPPER_GOLD = "copper_gold"
     DOLLAR = "dollar"
     CREDIT_SPREAD = "credit_spread"
+    BREADTH = "breadth"
 
 
 @dataclass
@@ -107,12 +108,12 @@ SIGNAL_SECTOR_MAP: dict[str, dict[str, dict[str, list[str]]]] = {
         },
     },
     "dollar": {
-        "up": {  # DXY strengthening
+        "up": {  # DXY strengthening → hurts EM, multinationals with foreign revenue
             "long_sectors": ["financials"],
-            "short_sectors": ["materials", "technology"],
+            "short_sectors": ["materials", "technology", "industrials"],
         },
-        "down": {  # DXY weakening
-            "long_sectors": ["materials", "technology"],
+        "down": {  # DXY weakening → helps EM-exposed, commodity exporters
+            "long_sectors": ["materials", "industrials", "technology"],
             "short_sectors": ["financials"],
         },
     },
@@ -133,6 +134,16 @@ SIGNAL_SECTOR_MAP: dict[str, dict[str, dict[str, list[str]]]] = {
         },
         "down": {  # inversion (fear)
             "long_sectors": ["utilities", "consumer_staples"],
+            "short_sectors": ["technology", "consumer_discretionary"],
+        },
+    },
+    "breadth": {
+        "up": {  # breadth expanding — broad participation = risk-on
+            "long_sectors": ["technology", "consumer_discretionary", "industrials"],
+            "short_sectors": ["utilities", "consumer_staples"],
+        },
+        "down": {  # breadth deteriorating — narrow market = risk-off
+            "long_sectors": ["utilities", "consumer_staples", "healthcare"],
             "short_sectors": ["technology", "consumer_discretionary"],
         },
     },
@@ -419,6 +430,41 @@ def compute_credit_signal(
     )
 
 
+def compute_breadth_signal(
+    vol: VolContext,
+    lookback: int = ZSCORE_LOOKBACK,
+) -> CrossAssetSignal | None:
+    """Market breadth z-score: % of S&P 500 above 200-day SMA.
+
+    Uses the breadth data from VolContext (pct_above_200sma) to derive
+    a sector rotation signal. Expanding breadth favors risk-on sectors;
+    deteriorating breadth favors defensives.
+    """
+    breadth_pct = vol.pct_above_200sma
+
+    # Center around 50% (neutral) and normalize
+    # >70% is bullish, <30% is bearish per spec
+    deviation = (breadth_pct - 50.0) / 20.0
+    z_proxy = max(-3.0, min(3.0, deviation))
+
+    direction = "up" if z_proxy > 0 else "down"
+    mapping = SIGNAL_SECTOR_MAP["breadth"][direction]
+
+    return CrossAssetSignal(
+        signal_type=MacroSignalType.BREADTH,
+        z_score=z_proxy,
+        direction=direction,
+        raw_value=breadth_pct,
+        trailing_mean=50.0,
+        trailing_std=20.0,
+        long_sectors=mapping["long_sectors"],
+        short_sectors=mapping["short_sectors"],
+        long_etfs=_sectors_to_etfs(mapping["long_sectors"]),
+        short_etfs=_sectors_to_etfs(mapping["short_sectors"]),
+        description=f"Market breadth z={z_proxy:+.2f} ({breadth_pct:.0f}% above 200 SMA)",
+    )
+
+
 def scan_all_cross_asset_signals(
     vol: VolContext,
     z_threshold: float | None = None,
@@ -456,6 +502,7 @@ def scan_all_cross_asset_signals(
         ("copper_gold", lambda: compute_copper_gold_signal(data)),
         ("dollar", lambda: compute_dollar_signal(data)),
         ("credit_spread", lambda: compute_credit_signal(data)),
+        ("breadth", lambda: compute_breadth_signal(vol)),
     ]
 
     fired: list[CrossAssetSignal] = []

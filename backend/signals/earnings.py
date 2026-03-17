@@ -97,11 +97,15 @@ def detect_pead(
 
     revision_trend = _estimate_revision_trend(ticker)
     historical_drift = _estimate_historical_drift(ticker)
+    guidance_raised = _detect_guidance_raise(latest, ticker)
+    sector_positive = _is_sector_positive(ticker, vol)
     composite = _compute_composite_score(
         surprise_pct=surprise_pct,
         gap_pct=earnings_day_return,
         revision_trend=revision_trend,
         historical_drift=historical_drift,
+        guidance_raised=guidance_raised,
+        sector_positive=sector_positive,
     )
 
     return EarningsSignal(
@@ -112,7 +116,7 @@ def detect_pead(
         surprise_pct=round(surprise_pct, 2),
         earnings_day_gap_pct=round(earnings_day_return, 2),
         revision_trend_pre=round(revision_trend, 3),
-        guidance_raised=False,
+        guidance_raised=guidance_raised,
         historical_drift_avg=round(historical_drift, 3),
         composite_score=round(composite, 2),
     )
@@ -204,23 +208,81 @@ def _estimate_historical_drift(ticker: str) -> float:
     return float(sum(drifts) / len(drifts)) if drifts else 0.0
 
 
+def _detect_guidance_raise(earnings_record: dict, ticker: str) -> bool:
+    """Detect whether management raised forward guidance.
+
+    Checks if the earnings record contains guidance data (from paid API)
+    and falls back to a heuristic: if current-quarter estimate > previous
+    quarter estimate by meaningful margin, guidance was likely raised.
+    """
+    if earnings_record.get("guidance_raised") is True:
+        return True
+
+    if earnings_record.get("revenue_guidance_high"):
+        revenue_est = earnings_record.get("revenue_estimate", 0)
+        guidance_high = earnings_record.get("revenue_guidance_high", 0)
+        if revenue_est > 0 and guidance_high > revenue_est * 1.02:
+            return True
+
+    try:
+        recs = yfinance_source.get_recommendation_trends(ticker)
+        if recs and len(recs) >= 2:
+            recent = recs[0]
+            older = recs[1]
+            recent_strong_buy = recent.get("strong_buy", 0)
+            older_strong_buy = older.get("strong_buy", 0)
+            if recent_strong_buy > older_strong_buy + 2:
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _is_sector_positive(ticker: str, vol: VolContext) -> bool:
+    """Check if the ticker's sector is in a positive regime.
+
+    Uses breadth and vol context as a proxy — in broad bull markets
+    with high breadth, most sectors are positive.
+    """
+    is_broad_bullish = vol.pct_above_200sma > 60
+    is_low_stress = vol.vix_current < 22
+
+    try:
+        df = data_fetcher.get_daily_ohlcv(ticker, period="3mo")
+        if df.empty or len(df) < 50:
+            return is_broad_bullish
+        sma_50 = float(df["Close"].tail(50).mean())
+        current = float(df["Close"].iloc[-1])
+        above_sma = current > sma_50
+        return above_sma and (is_broad_bullish or is_low_stress)
+    except Exception:
+        return is_broad_bullish
+
+
 def _compute_composite_score(
     surprise_pct: float,
     gap_pct: float,
     revision_trend: float,
     historical_drift: float,
+    guidance_raised: bool = False,
+    sector_positive: bool = True,
 ) -> float:
     """Weighted composite score for PEAD quality (0-100 scale).
 
     Weights:
-      40% — surprise magnitude (capped at 20% = full marks)
-      25% — earnings day gap (capped at 10% = full marks)
-      20% — revision trend pre-earnings
-      15% — historical drift tendency
+      30% — surprise magnitude (capped at 20% = full marks)
+      20% — earnings day gap (capped at 10% = full marks)
+      15% — revision trend pre-earnings
+      10% — historical drift tendency
+      15% — guidance raised (strongest signal when combined with beat)
+      10% — sector context (positive regime boost)
     """
-    surprise_score = min(1.0, abs(surprise_pct) / 20.0) * 40
-    gap_score = min(1.0, abs(gap_pct) / 10.0) * 25
-    revision_score = (0.5 + min(0.5, max(-0.5, revision_trend))) * 20
-    drift_score = (0.5 + min(0.5, max(-0.5, historical_drift * 5))) * 15
+    surprise_score = min(1.0, abs(surprise_pct) / 20.0) * 30
+    gap_score = min(1.0, abs(gap_pct) / 10.0) * 20
+    revision_score = (0.5 + min(0.5, max(-0.5, revision_trend))) * 15
+    drift_score = (0.5 + min(0.5, max(-0.5, historical_drift * 5))) * 10
+    guidance_score = 15.0 if guidance_raised else 0.0
+    sector_score = 10.0 if sector_positive else 0.0
 
-    return min(100.0, surprise_score + gap_score + revision_score + drift_score)
+    return min(100.0, surprise_score + gap_score + revision_score + drift_score + guidance_score + sector_score)

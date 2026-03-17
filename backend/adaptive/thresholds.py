@@ -65,7 +65,7 @@ def get_gap_reversion_params(vol: VolContext) -> dict:
         "max_gap_pct": max(3.0, 5.0 * vs),
         "stop_pct_of_gap": 0.5 * max(0.8, min(1.5, vs)),
         "close_by_time": "11:00" if vs < 1.3 else "10:30",
-        "max_vix_for_trading": 35,
+        "max_vix_for_trading": 30,
         "max_position_pct": 0.02 * vol.position_scale,
     }
 

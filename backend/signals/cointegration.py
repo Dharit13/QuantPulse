@@ -1,6 +1,6 @@
 """Cointegration tests and spread analysis for statistical arbitrage.
 
-Tests: ADF, Engle-Granger, half-life via OU process, Hurst exponent.
+Tests: ADF, Engle-Granger, Johansen, half-life via OU process, Hurst exponent.
 """
 
 import logging
@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from statsmodels.tsa.stattools import adfuller, coint
+from statsmodels.tsa.vector_ar.vecm import coint_johansen
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,42 @@ def engle_granger_test(series_a: pd.Series, series_b: pd.Series) -> dict:
     except Exception:
         logger.exception("Engle-Granger test failed")
         return {"statistic": 0.0, "pvalue": 1.0, "is_cointegrated": False}
+
+
+def johansen_test(series_a: pd.Series, series_b: pd.Series) -> dict:
+    """Johansen cointegration test for two (or more) price series.
+
+    Tests whether a cointegrating relationship exists using the trace
+    statistic at the 1% significance level.
+    """
+    if len(series_a) < 30 or len(series_b) < 30:
+        return {"trace_stat": 0.0, "critical_value_1pct": 0.0, "is_cointegrated": False}
+
+    try:
+        common = series_a.index.intersection(series_b.index)
+        a = series_a.loc[common].dropna()
+        b = series_b.loc[common].dropna()
+
+        if len(a) < 30:
+            return {"trace_stat": 0.0, "critical_value_1pct": 0.0, "is_cointegrated": False}
+
+        data = np.column_stack([a.values, b.values])
+        # det_order=-1 = no deterministic terms, k_ar_diff=1 = 1 lag in VECM
+        result = coint_johansen(data, det_order=0, k_ar_diff=1)
+
+        # r=0 hypothesis (no cointegration): reject if trace_stat > critical value
+        # Critical values columns: [10%, 5%, 1%] — index 2 is 1%
+        trace_stat = float(result.lr1[0])
+        crit_1pct = float(result.cvt[0, 2])
+
+        return {
+            "trace_stat": trace_stat,
+            "critical_value_1pct": crit_1pct,
+            "is_cointegrated": trace_stat > crit_1pct,
+        }
+    except Exception:
+        logger.exception("Johansen test failed")
+        return {"trace_stat": 0.0, "critical_value_1pct": 0.0, "is_cointegrated": False}
 
 
 def compute_half_life(spread: pd.Series) -> float:
@@ -147,21 +184,27 @@ def validate_pair(
     min_half_life: float = 3.0,
     max_half_life: float = 30.0,
 ) -> dict:
-    """Run full pair validation suite. Returns pass/fail with details."""
+    """Run full pair validation suite (ADF + Engle-Granger + Johansen).
+
+    Requires p < 0.01 on at least 2 of 3 cointegration tests,
+    plus half-life and Hurst constraints.
+    """
     spread = compute_spread(series_a, series_b)
 
     adf = adf_test(spread)
     eg = engle_granger_test(series_a, series_b)
+    joh = johansen_test(series_a, series_b)
     hl = compute_half_life(spread)
     hurst = compute_hurst_exponent(spread)
 
     tests_passed = sum([
         adf["is_stationary"],
         eg["is_cointegrated"],
+        joh["is_cointegrated"],
     ])
 
     is_valid = (
-        tests_passed >= 1
+        tests_passed >= 2
         and min_half_life <= hl <= max_half_life
         and hurst < 0.5
     )
@@ -170,6 +213,7 @@ def validate_pair(
         "is_valid": is_valid,
         "adf": adf,
         "engle_granger": eg,
+        "johansen": joh,
         "half_life": hl,
         "hurst_exponent": hurst,
         "tests_passed": tests_passed,

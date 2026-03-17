@@ -7,6 +7,7 @@ mean-reversion of spreads using adaptive z-score thresholds.
 import logging
 from itertools import combinations
 
+import numpy as np
 import pandas as pd
 
 from backend.adaptive.kelly_adaptive import compute_adaptive_kelly
@@ -28,6 +29,11 @@ from backend.strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
+MIN_CORRELATION_252D = 0.70
+MIN_AVG_DOLLAR_VOLUME = 5_000_000
+SHARPE_PAUSE_THRESHOLD = 0.5
+HURST_DECAY_THRESHOLD = 0.5
+
 
 class StatArbStrategy(BaseStrategy):
     """Statistical arbitrage pairs trading strategy."""
@@ -35,6 +41,7 @@ class StatArbStrategy(BaseStrategy):
     def __init__(self):
         self.active_pairs: list[dict] = []
         self.trailing_trades: list[dict] = []
+        self.paused_pairs: dict[str, int] = {}  # "t1/t2" -> days remaining
 
     @property
     def name(self) -> str:
@@ -70,6 +77,15 @@ class StatArbStrategy(BaseStrategy):
                 if s1 is None or s2 is None or s1.empty or s2.empty:
                     continue
 
+                # Liquidity filter: both legs must have avg dollar volume >= $5M
+                if not self._passes_liquidity_filter(s1) or not self._passes_liquidity_filter(s2):
+                    continue
+
+                # Correlation filter: rolling 252-day correlation must exceed 0.70
+                corr = self._compute_rolling_correlation(s1["Close"], s2["Close"])
+                if corr < MIN_CORRELATION_252D:
+                    continue
+
                 result = validate_pair(
                     s1["Close"],
                     s2["Close"],
@@ -88,6 +104,9 @@ class StatArbStrategy(BaseStrategy):
                         "hurst": result["hurst_exponent"],
                         "adf_pvalue": result["adf"]["pvalue"],
                         "eg_pvalue": result["engle_granger"]["pvalue"],
+                        "johansen_cointegrated": result["johansen"]["is_cointegrated"],
+                        "tests_passed": result["tests_passed"],
+                        "correlation_252d": corr,
                         "spread_mean": result["spread_stats"]["mean"],
                         "spread_std": result["spread_stats"]["std"],
                     })
@@ -124,6 +143,15 @@ class StatArbStrategy(BaseStrategy):
     ) -> TradeSignal | None:
         """Evaluate a single pair for entry/exit signals."""
         t1, t2 = pair["ticker_a"], pair["ticker_b"]
+        pair_key = f"{t1}/{t2}"
+
+        # Sharpe-based pause: skip pairs that have been paused
+        if pair_key in self.paused_pairs:
+            if self.paused_pairs[pair_key] > 0:
+                self.paused_pairs[pair_key] -= 1
+                return None
+            del self.paused_pairs[pair_key]
+
         s1 = data_fetcher.get_daily_ohlcv(t1, period="6mo")
         s2 = data_fetcher.get_daily_ohlcv(t2, period="6mo")
 
@@ -131,6 +159,27 @@ class StatArbStrategy(BaseStrategy):
             return None
 
         spread = compute_spread(s1["Close"], s2["Close"])
+
+        # Edge decay monitor: rolling 60-day Hurst exponent
+        recent_spread = spread.tail(120)
+        current_hurst = compute_hurst_exponent(recent_spread)
+        if current_hurst >= HURST_DECAY_THRESHOLD:
+            logger.info(
+                "Pair %s/%s skipped: Hurst=%.2f (>= %.2f, trending)",
+                t1, t2, current_hurst, HURST_DECAY_THRESHOLD,
+            )
+            return None
+
+        # Check trailing 60-day Sharpe for this pair
+        pair_sharpe = self._compute_pair_sharpe(spread, window=60)
+        if pair_sharpe < SHARPE_PAUSE_THRESHOLD:
+            logger.info(
+                "Pair %s/%s paused: 60d Sharpe=%.2f < %.2f",
+                t1, t2, pair_sharpe, SHARPE_PAUSE_THRESHOLD,
+            )
+            self.paused_pairs[pair_key] = 5
+            return None
+
         zscore = compute_zscore(spread)
 
         if zscore.empty:
@@ -176,6 +225,18 @@ class StatArbStrategy(BaseStrategy):
 
         conviction = min(1.0, abs(current_z) / stop_z)
 
+        # Target: price corresponding to exit z-score (|z| < exit_z = spread normalized)
+        exit_z = pair_params["exit_z"]
+        spread_mean = pair["spread_mean"]
+        spread_std = pair["spread_std"]
+        if current_z > 0:
+            target_spread = spread_mean + exit_z * spread_std
+        else:
+            target_spread = spread_mean - exit_z * spread_std
+        # Translate spread target back to price of ticker A
+        price_b = float(s2["Close"].iloc[-1])
+        target = round(target_spread * price_b, 2)
+
         return TradeSignal(
             strategy=StrategyName.STAT_ARB,
             ticker=ticker,
@@ -184,12 +245,13 @@ class StatArbStrategy(BaseStrategy):
             kelly_size_pct=kelly["kelly_fraction"] * 100,
             entry_price=entry_price,
             stop_loss=stop_info["stop_price"],
-            target=entry_price * (1.05 if direction == "long" else 0.95),
+            target=target,
             max_hold_days=pair_params["max_hold_days"],
             edge_reason=(
                 f"Pair {t1}/{t2} spread at {current_z:.1f}σ divergence. "
                 f"Cointegrated (ADF p={pair['adf_pvalue']:.4f}), "
-                f"half-life={pair['half_life']:.1f}d, Hurst={pair['hurst']:.2f}"
+                f"half-life={pair['half_life']:.1f}d, Hurst={pair['hurst']:.2f}. "
+                f"Exit when |z| < {exit_z:.2f} (spread normalizes)"
             ),
             kill_condition=(
                 f"Spread exceeds {stop_z:.1f}σ (cointegration breaking) "
@@ -198,6 +260,39 @@ class StatArbStrategy(BaseStrategy):
             expected_sharpe=1.5,
             signal_score=min(100, conviction * 100),
         )
+
+    @staticmethod
+    def _passes_liquidity_filter(df: pd.DataFrame) -> bool:
+        """Both legs must have avg dollar volume >= $5M."""
+        if df.empty or "Volume" not in df.columns or "Close" not in df.columns:
+            return False
+        avg_dollar_vol = (df["Close"] * df["Volume"]).tail(20).mean()
+        return float(avg_dollar_vol) >= MIN_AVG_DOLLAR_VOLUME
+
+    @staticmethod
+    def _compute_rolling_correlation(
+        series_a: pd.Series,
+        series_b: pd.Series,
+        window: int = 252,
+    ) -> float:
+        """Compute trailing rolling correlation between two price series."""
+        common = series_a.index.intersection(series_b.index)
+        if len(common) < window:
+            return 0.0
+        a = series_a.loc[common].tail(window)
+        b = series_b.loc[common].tail(window)
+        corr = float(a.corr(b))
+        return corr if np.isfinite(corr) else 0.0
+
+    @staticmethod
+    def _compute_pair_sharpe(spread: pd.Series, window: int = 60) -> float:
+        """Compute trailing Sharpe ratio of the spread's returns."""
+        if len(spread) < window + 1:
+            return 1.0  # default to acceptable when insufficient data
+        returns = spread.pct_change().dropna().tail(window)
+        if returns.empty or returns.std() == 0:
+            return 0.0
+        return float(returns.mean() / returns.std() * np.sqrt(252))
 
     @staticmethod
     def _compute_atr(df: pd.DataFrame, period: int = 14) -> float:

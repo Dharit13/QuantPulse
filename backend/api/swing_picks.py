@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Query
 
+from backend.data.cache import data_cache
 from backend.data.fetcher import DataFetcher
 from backend.data.sources.yfinance_src import yfinance_source
 
@@ -429,7 +430,7 @@ def _run_scan_background(min_return_pct: float, max_hold_days: int) -> None:
         quick_trades.sort(key=lambda x: x["score"], reverse=True)
         swing_trades.sort(key=lambda x: x["score"], reverse=True)
 
-        _scan_state["result"] = {
+        result_data = {
             "quick_trades": quick_trades[:15],
             "swing_trades": swing_trades[:15],
             "scan_stats": {
@@ -439,7 +440,9 @@ def _run_scan_background(min_return_pct: float, max_hold_days: int) -> None:
                 "max_hold_days": max_hold_days,
             },
         }
+        _scan_state["result"] = result_data
         _scan_state["status"] = "done"
+        data_cache.set("swing:last_result", result_data, ttl_hours=24.0)
         logger.info("Background swing scan done: %d quick + %d swing",
                      len(quick_trades[:15]), len(swing_trades[:15]))
     except Exception as e:
@@ -473,11 +476,20 @@ async def start_swing_scan(
 @router.get("/status")
 async def get_scan_status() -> dict:
     """Poll scan progress. Returns status, progress, and results when done."""
+    result = _scan_state["result"] if _scan_state["status"] == "done" else None
+
+    if result is None and _scan_state["status"] == "idle":
+        cached = data_cache.get("swing:last_result")
+        if cached:
+            result = cached
+            _scan_state["status"] = "done"
+            _scan_state["result"] = cached
+
     return {
         "status": _scan_state["status"],
         "progress": _scan_state["progress"],
         "total": _scan_state["total"],
-        "result": _scan_state["result"] if _scan_state["status"] == "done" else None,
+        "result": result,
         "error": _scan_state["error"],
     }
 

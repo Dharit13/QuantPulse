@@ -5,7 +5,7 @@ This object is passed to EVERY function that uses parameters.
 Nothing in the system uses a hardcoded threshold.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
