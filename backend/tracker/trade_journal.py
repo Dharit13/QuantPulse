@@ -105,6 +105,11 @@ class TradeJournal:
                 stop_suggested=phantom.stop_suggested,
                 target_suggested=phantom.target_suggested,
                 pass_reason=phantom.pass_reason,
+                regime=phantom.regime,
+                vix_at_signal=phantom.vix_at_signal,
+                atr_at_signal=phantom.atr_at_signal,
+                conviction=phantom.conviction,
+                signal_id=phantom.signal_id,
             )
             db.add(record)
             db.commit()

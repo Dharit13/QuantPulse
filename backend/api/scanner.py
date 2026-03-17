@@ -1,11 +1,8 @@
 """Universe scanner — generate today's top trade ideas across all strategies.
 
-The scan runs strategies in a background thread to avoid blocking the
-async event loop.  Catalyst and cross-asset scans are limited to a
-manageable ticker subset so the endpoint responds in <30 seconds.
-
-Every signal generated is automatically logged to the signal audit trail
-and created as a phantom trade for shadow-book tracking.
+Level 8 signal cards: every signal is enriched with tradability proof,
+shadow evidence from phantom trades, and strategy health monitoring
+before being returned to the user.
 """
 
 from __future__ import annotations
@@ -13,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date as date_type
 from datetime import datetime
 
 from fastapi import APIRouter, Query
@@ -21,9 +19,22 @@ from backend.adaptive.vol_context import VolContext, compute_vol_context
 from backend.config import settings
 from backend.data.cache import data_cache
 from backend.data.fetcher import DataFetcher
-from backend.models.schemas import Regime, ScannerResult, StrategyName, TradeSignal
+from backend.models.schemas import (
+    EnrichedSignal,
+    PhantomTrade,
+    Regime,
+    ScannerResult,
+    ShadowEvidence,
+    StrategyHealthSummary,
+    StrategyName,
+    TradabilityResult,
+    TradeSignal,
+)
 from backend.regime.detector import detect_regime
+from backend.signals.tradability import check_tradability
+from backend.tracker.shadow_evidence import get_similar_signal_evidence
 from backend.tracker.signal_audit import SignalAuditor
+from backend.tracker.strategy_health import compute_strategy_health
 
 router = APIRouter(prefix="/scan", tags=["scanner"])
 logger = logging.getLogger(__name__)
@@ -31,27 +42,142 @@ _fetcher = DataFetcher()
 _executor = ThreadPoolExecutor(max_workers=2)
 _auditor = SignalAuditor()
 
-SCAN_WATCHLIST = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
-    "JPM", "V", "UNH", "JNJ", "XOM", "PG", "MA", "HD", "COST", "ABBV",
-    "CRM", "MRK", "CVX", "LLY", "PEP", "KO", "AVGO", "TMO", "MCD",
-    "CSCO", "ACN", "ABT", "DHR", "NKE", "TXN", "WMT", "NEE", "PM",
-    "UPS", "RTX", "LOW", "HON", "IBM", "GS", "CAT", "BA", "AMGN",
-    "AMD", "INTC", "QCOM", "AMAT", "ADI",
-]
+def _get_scan_universe(max_tickers: int = 100) -> list[str]:
+    """Build scan universe dynamically from S&P 500 constituents."""
+    try:
+        from backend.data.universe import fetch_sp500_constituents
+        sp500 = fetch_sp500_constituents()
+        if not sp500.empty:
+            return sp500["ticker"].tolist()[:max_tickers]
+    except Exception:
+        logger.warning("Failed to fetch dynamic universe, using fallback")
+
+    return [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
+        "JPM", "V", "UNH", "JNJ", "XOM", "PG", "MA", "HD", "COST", "ABBV",
+        "CRM", "MRK", "CVX", "LLY", "PEP", "KO", "AVGO", "TMO", "MCD",
+        "CSCO", "ACN", "ABT", "DHR", "NKE", "TXN", "WMT", "NEE", "PM",
+        "UPS", "RTX", "LOW", "HON", "IBM", "GS", "CAT", "BA", "AMGN",
+        "AMD", "INTC", "QCOM", "AMAT", "ADI",
+    ]
 
 
-def _log_signals_to_shadow_book(signals: list[TradeSignal]) -> None:
-    """Auto-log every signal to the audit trail and create phantom entries."""
-    from datetime import date as date_type
+# ── Enrichment pipeline ──────────────────────────────────────
 
-    from backend.models.schemas import PhantomTrade
+
+def _enrich_signals(
+    signals: list[TradeSignal],
+    vol: VolContext,
+    regime: Regime,
+) -> list[EnrichedSignal]:
+    """Wrap each TradeSignal with tradability, shadow evidence, and health."""
+    enriched: list[EnrichedSignal] = []
+    health_cache: dict[str, StrategyHealthSummary] = {}
+
+    for sig in signals:
+        try:
+            # Tradability gate
+            trad = check_tradability(sig, capital=settings.initial_capital)
+            trad_result = TradabilityResult(
+                passed=trad.passed,
+                projected_slippage_bps=trad.projected_slippage_bps,
+                pct_adv_used=trad.pct_adv_used,
+                borrow_available=trad.borrow_available,
+                spread_acceptable=trad.spread_acceptable,
+                reasons=trad.reasons,
+            )
+
+            # Shadow evidence
+            shadow = get_similar_signal_evidence(
+                strategy=sig.strategy.value,
+                direction=sig.direction,
+                regime=regime.value,
+                lookback_days=90,
+            )
+            shadow_result = ShadowEvidence(
+                phantom_count=shadow.phantom_count,
+                win_rate=shadow.win_rate,
+                avg_pnl_pct=shadow.avg_pnl_pct,
+                avg_hold_days=shadow.avg_hold_days,
+                realized_sharpe=shadow.realized_sharpe,
+                best_trade_pct=shadow.best_trade_pct,
+                worst_trade_pct=shadow.worst_trade_pct,
+                has_enough_data=shadow.has_enough_data,
+            )
+
+            # Strategy health (cached per strategy per scan)
+            strat_key = sig.strategy.value
+            if strat_key not in health_cache:
+                health = compute_strategy_health(
+                    strategy=strat_key,
+                    current_regime=regime.value,
+                )
+                health_cache[strat_key] = StrategyHealthSummary(
+                    status=health.status,
+                    rolling_sharpe_60d=health.rolling_sharpe_60d,
+                    rolling_win_rate_60d=health.rolling_win_rate_60d,
+                    phantom_count_60d=health.phantom_count_60d,
+                    slippage_deteriorating=health.slippage_deteriorating,
+                    regime_alignment=health.regime_alignment,
+                    size_adjustment=health.size_adjustment,
+                )
+            health_summary = health_cache[strat_key]
+
+            # Final recommendation
+            if not trad.passed or health_summary.status == "paused":
+                recommendation = "do_not_trade"
+                size_reason = "Tradability failed" if not trad.passed else "Strategy paused"
+            elif not shadow.has_enough_data or health_summary.status == "degraded":
+                recommendation = "conditional_trade"
+                size_reason = (
+                    "Insufficient shadow data" if not shadow.has_enough_data
+                    else "Strategy degraded — reduced size"
+                )
+            else:
+                recommendation = "trade"
+                size_reason = "All checks passed"
+
+            size_mode = settings.sizing_mode
+            if health_summary.size_adjustment < 1.0:
+                size_mode += f"_reduced_{int(health_summary.size_adjustment * 100)}pct"
+
+            enriched.append(EnrichedSignal(
+                signal=sig,
+                tradability=trad_result,
+                shadow_evidence=shadow_result,
+                strategy_health=health_summary,
+                regime=regime.value,
+                regime_alignment=health_summary.regime_alignment,
+                recommended_size_mode=size_mode,
+                size_adjustment_reason=size_reason,
+                final_recommendation=recommendation,
+            ))
+        except Exception:
+            logger.debug("Failed to enrich signal for %s", sig.ticker)
+
+    return enriched
+
+
+# ── Shadow book logging ──────────────────────────────────────
+
+
+def _log_signals_to_shadow_book(
+    signals: list[TradeSignal],
+    regime: Regime,
+    vol: VolContext,
+) -> None:
+    """Auto-log every signal with full context for similarity queries."""
     from backend.tracker.trade_journal import TradeJournal
 
     journal = TradeJournal()
     for sig in signals:
         try:
-            _auditor.log_signal(sig, acted_on=False)
+            signal_id = _auditor.log_signal(
+                sig,
+                acted_on=False,
+                regime=regime.value,
+                vix=vol.vix_current,
+            )
             phantom = PhantomTrade(
                 ticker=sig.ticker,
                 direction=sig.direction,
@@ -62,21 +188,30 @@ def _log_signals_to_shadow_book(signals: list[TradeSignal]) -> None:
                 stop_suggested=sig.stop_loss,
                 target_suggested=sig.target,
                 pass_reason="auto-logged (advisory mode)",
+                regime=regime.value,
+                vix_at_signal=vol.vix_current,
+                atr_at_signal=vol.spy_atr_pct * 100,
+                conviction=sig.conviction,
+                signal_id=signal_id,
             )
             journal.log_phantom(phantom)
         except Exception:
             logger.debug("Failed to shadow-log signal for %s", sig.ticker)
 
 
+# ── Strategy scan ────────────────────────────────────────────
+
+
 def _run_scan(vol: VolContext, regime: Regime) -> list[TradeSignal]:
     """Execute all strategy scans synchronously (runs in thread pool)."""
     all_signals: list[TradeSignal] = []
+    tickers = _get_scan_universe()
 
     if settings.enable_catalyst:
         try:
             from backend.strategies.catalyst_event import CatalystEventStrategy
             catalyst = CatalystEventStrategy()
-            all_signals.extend(catalyst.generate_signals(vol, tickers=SCAN_WATCHLIST, regime=regime.value))
+            all_signals.extend(catalyst.generate_signals(vol, tickers=tickers, regime=regime.value))
         except Exception as e:
             logger.warning("Catalyst scan error: %s", e)
 
@@ -84,7 +219,7 @@ def _run_scan(vol: VolContext, regime: Regime) -> list[TradeSignal]:
         try:
             from backend.strategies.cross_asset_momentum import CrossAssetMomentumStrategy
             cross = CrossAssetMomentumStrategy()
-            all_signals.extend(cross.generate_signals(vol, tickers=SCAN_WATCHLIST, regime=regime.value))
+            all_signals.extend(cross.generate_signals(vol, tickers=tickers, regime=regime.value))
         except Exception as e:
             logger.warning("CrossAsset scan error: %s", e)
 
@@ -92,11 +227,14 @@ def _run_scan(vol: VolContext, regime: Regime) -> list[TradeSignal]:
         try:
             from backend.strategies.gap_reversion import GapReversionStrategy
             gap = GapReversionStrategy()
-            all_signals.extend(gap.generate_signals(vol, tickers=SCAN_WATCHLIST, regime=regime.value))
+            all_signals.extend(gap.generate_signals(vol, tickers=tickers, regime=regime.value))
         except Exception as e:
             logger.warning("GapReversion scan error: %s", e)
 
     return all_signals
+
+
+# ── Endpoints ────────────────────────────────────────────────
 
 
 @router.get("/", response_model=ScannerResult)
@@ -114,8 +252,9 @@ async def scan_universe(
     loop = asyncio.get_event_loop()
     all_signals = await loop.run_in_executor(_executor, _run_scan, vol, regime)
 
-    filtered = [s for s in all_signals if s.signal_score >= min_score]
-    filtered.sort(key=lambda s: s.conviction, reverse=True)
+    enriched = _enrich_signals(all_signals, vol, regime)
+    filtered = [e for e in enriched if e.signal.signal_score >= min_score]
+    filtered.sort(key=lambda e: e.signal.conviction, reverse=True)
     filtered = filtered[:max_signals]
 
     return ScannerResult(
@@ -126,12 +265,12 @@ async def scan_universe(
     )
 
 
-# ── Background scan state ──
+# ── Background scan ──────────────────────────────────────────
 
 _scanner_state: dict = {
     "status": "idle",
     "progress": 0,
-    "total": len(SCAN_WATCHLIST),
+    "total": 0,
     "result": None,
     "error": None,
 }
@@ -144,7 +283,7 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
         _scanner_state["status"] = "scanning"
         _scanner_state["error"] = None
         _scanner_state["progress"] = 0
-        _scanner_state["total"] = 3  # regime + vol + strategies
+        _scanner_state["total"] = 4
 
         vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
         spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
@@ -156,13 +295,15 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
         all_signals = _run_scan(vol, regime)
         _scanner_state["progress"] = 2
 
-        # Auto-log all signals to shadow book before filtering
-        _log_signals_to_shadow_book(all_signals)
+        _log_signals_to_shadow_book(all_signals, regime, vol)
 
-        filtered = [s for s in all_signals if s.signal_score >= min_score]
-        filtered.sort(key=lambda s: s.conviction, reverse=True)
-        filtered = filtered[:max_signals]
+        enriched = _enrich_signals(all_signals, vol, regime)
         _scanner_state["progress"] = 3
+
+        filtered = [e for e in enriched if e.signal.signal_score >= min_score]
+        filtered.sort(key=lambda e: e.signal.conviction, reverse=True)
+        filtered = filtered[:max_signals]
+        _scanner_state["progress"] = 4
 
         result = ScannerResult(
             timestamp=datetime.utcnow(),
@@ -196,7 +337,7 @@ async def start_scan(
 
     _scanner_state["status"] = "scanning"
     _scanner_state["progress"] = 0
-    _scanner_state["total"] = 3
+    _scanner_state["total"] = 4
     _scanner_state["result"] = None
 
     _executor.submit(_run_scanner_background, max_signals, min_score)

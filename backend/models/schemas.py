@@ -114,6 +114,12 @@ class PhantomTrade(BaseModel):
     target_suggested: float
     pass_reason: str = ""
 
+    regime: str | None = None
+    vix_at_signal: float | None = None
+    atr_at_signal: float | None = None
+    conviction: float | None = None
+    signal_id: int | None = None
+
     phantom_exit_date: date | None = None
     phantom_exit_price: float | None = None
     phantom_pnl_pct: float | None = None
@@ -146,10 +152,55 @@ class StockAnalysis(BaseModel):
     fundamentals: dict | None = None
 
 
+# ── Level 8 Signal Card ──
+
+
+class TradabilityResult(BaseModel):
+    passed: bool
+    projected_slippage_bps: float
+    pct_adv_used: float
+    borrow_available: bool
+    spread_acceptable: bool
+    reasons: list[str]
+
+
+class ShadowEvidence(BaseModel):
+    phantom_count: int
+    win_rate: float
+    avg_pnl_pct: float
+    avg_hold_days: float
+    realized_sharpe: float
+    best_trade_pct: float
+    worst_trade_pct: float
+    has_enough_data: bool
+
+
+class StrategyHealthSummary(BaseModel):
+    status: str
+    rolling_sharpe_60d: float
+    rolling_win_rate_60d: float
+    phantom_count_60d: int
+    slippage_deteriorating: bool
+    regime_alignment: str
+    size_adjustment: float
+
+
+class EnrichedSignal(BaseModel):
+    signal: TradeSignal
+    tradability: TradabilityResult
+    shadow_evidence: ShadowEvidence
+    strategy_health: StrategyHealthSummary
+    regime: str
+    regime_alignment: str
+    recommended_size_mode: str
+    size_adjustment_reason: str
+    final_recommendation: str
+
+
 class ScannerResult(BaseModel):
     timestamp: datetime
     regime: Regime
-    signals: list[TradeSignal]
+    signals: list[EnrichedSignal]
     total_signals: int
 
 

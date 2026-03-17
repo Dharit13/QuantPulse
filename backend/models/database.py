@@ -70,6 +70,13 @@ class PhantomTradeRecord(Base):
     target_suggested = Column(Float, nullable=False)
     pass_reason = Column(Text, default="")
 
+    # Context at signal generation time (for similarity queries)
+    regime = Column(String(20), nullable=True)
+    vix_at_signal = Column(Float, nullable=True)
+    atr_at_signal = Column(Float, nullable=True)
+    conviction = Column(Float, nullable=True)
+    signal_id = Column(Integer, nullable=True)
+
     phantom_exit_date = Column(Date, nullable=True)
     phantom_exit_price = Column(Float, nullable=True)
     phantom_pnl_pct = Column(Float, nullable=True)
@@ -108,6 +115,11 @@ class SignalRecord(Base):
     edge_reason = Column(Text, nullable=False)
     kill_condition = Column(Text, nullable=False)
     acted_on = Column(Boolean, default=False)
+
+    # Context at signal generation time
+    regime = Column(String(20), nullable=True)
+    vix_at_signal = Column(Float, nullable=True)
+    max_hold_days = Column(Integer, nullable=True)
 
 
 class CacheRecord(Base):
