@@ -18,8 +18,8 @@ CROSS_ASSET_TICKERS = {
     "oil": "CL=F",
     "gold": "GC=F",
     "copper": "HG=F",
-    # Dollar
-    "dxy": "DX-Y.NYB",
+    # Dollar (UUP is the Invesco DB USD Index ETF — reliable proxy for DXY)
+    "dxy": "UUP",
     # Credit
     "hy_bond": "HYG",
     "ig_bond": "LQD",

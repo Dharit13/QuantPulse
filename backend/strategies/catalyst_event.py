@@ -1,9 +1,10 @@
 """Catalyst-Driven Event Trading Strategy.
 
-Orchestrates three sub-strategies:
+Orchestrates four sub-strategies:
   A) Post-Earnings Announcement Drift (PEAD)
   B) Analyst Revision Momentum
-  C) Institutional Flow Events (gated behind enable_smart_money)
+  C) Institutional Flow Events (SteadyAPI sweeps, gated behind enable_steadyapi)
+  D) Insider Buying Signal (SEC EDGAR Form 4, free)
 
 Each sub-strategy uses adaptive parameters from get_catalyst_params().
 """
@@ -88,8 +89,8 @@ class CatalystEventStrategy(BaseStrategy):
             except Exception:
                 logger.exception("Failed to convert revision signal for %s", rs.ticker)
 
-        # Sub-Strategy C: Institutional Flow (requires paid data)
-        if settings.enable_smart_money and settings.uw_api_key:
+        # Sub-Strategy C: Institutional Flow (SteadyAPI sweeps)
+        if settings.enable_steadyapi and settings.steadyapi_api_key:
             flow_signals = self._scan_flow_events(tickers, vol, regime)
             for sig in flow_signals:
                 if any(s.ticker == sig.ticker for s in signals):
@@ -97,11 +98,20 @@ class CatalystEventStrategy(BaseStrategy):
                 if self.validate_signal(sig):
                     signals.append(sig)
 
+        # Sub-Strategy D: Insider Buying (SEC EDGAR Form 4, free)
+        insider_signals = self._scan_insider_buying(tickers[:50], vol, regime)
+        for sig in insider_signals:
+            if any(s.ticker == sig.ticker for s in signals):
+                continue
+            if self.validate_signal(sig):
+                signals.append(sig)
+
         logger.info(
-            "Catalyst strategy generated %d signals (PEAD=%d, Revisions=%d)",
+            "Catalyst strategy generated %d signals (PEAD=%d, Revisions=%d, Insider=%d)",
             len(signals),
             len(pead_signals),
             len(revision_signals),
+            len(insider_signals),
         )
         return signals
 
@@ -224,21 +234,164 @@ class CatalystEventStrategy(BaseStrategy):
         vol: VolContext,
         regime: str,
     ) -> list[TradeSignal]:
-        """Sub-Strategy C: institutional flow events.
+        """Sub-Strategy C: institutional flow from SteadyAPI sweeps.
 
-        Requires enable_smart_money + uw_api_key. Stubbed interface
-        for when paid data becomes available.
+        Detects large call/put sweeps (>$500K premium) from SteadyAPI
+        and generates directional signals for swing trading.
         """
         signals: list[TradeSignal] = []
-        for ticker in tickers[:50]:
+
+        sweeps = data_fetcher.get_steadyapi_sweeps()
+        if not sweeps:
+            return signals
+
+        ticker_set = set(t.upper() for t in tickers)
+        params = self.get_params(vol)
+
+        # Aggregate sweeps by ticker
+        ticker_premium: dict[str, dict] = {}
+        for sweep in sweeps:
+            sym = sweep.get("symbol", "")
+            if sym not in ticker_set:
+                continue
+            if sym not in ticker_premium:
+                ticker_premium[sym] = {"call": 0.0, "put": 0.0, "count": 0}
+
+            premium = sweep.get("premium", 0)
+            if sweep.get("option_type") == "Call":
+                ticker_premium[sym]["call"] += premium
+            else:
+                ticker_premium[sym]["put"] += premium
+            ticker_premium[sym]["count"] += 1
+
+        for ticker, flow in ticker_premium.items():
+            total = flow["call"] + flow["put"]
+            if total < 500_000:
+                continue
+
+            if flow["call"] > flow["put"] * 2:
+                direction = "long"
+            elif flow["put"] > flow["call"] * 2:
+                direction = "short"
+            else:
+                continue
+
+            price = data_fetcher.get_current_price(ticker)
+            if price is None or price <= 0:
+                continue
+
+            atr = self._get_atr(ticker)
+            stop_info = compute_stop(price, direction, atr, "catalyst", vol)
+
+            target_mult = 1 + params["target_return_pct"] / 100
+            target = price * target_mult if direction == "long" else price / target_mult
+
+            kelly = compute_adaptive_kelly(
+                strategy="catalyst", vol=vol, regime=regime,
+                trailing_trades=self.trailing_trades,
+            )
+            conviction = min(1.0, total / 2_000_000 + flow["count"] / 10)
+
+            signals.append(TradeSignal(
+                strategy=StrategyName.CATALYST,
+                ticker=ticker,
+                direction=direction,
+                conviction=conviction,
+                kelly_size_pct=kelly["kelly_fraction"] * 0.8 * 100,
+                entry_price=price,
+                stop_loss=stop_info["stop_price"],
+                target=round(target, 2),
+                max_hold_days=params["max_hold_days"],
+                edge_reason=(
+                    f"Institutional sweep flow: {flow['count']} sweeps, "
+                    f"${total:,.0f} total premium "
+                    f"(call=${flow['call']:,.0f} / put=${flow['put']:,.0f}). "
+                    f"Sweeps = urgency."
+                ),
+                kill_condition=(
+                    f"Flow reverses or stop at {stop_info['stop_price']:.2f}"
+                ),
+                expected_sharpe=1.4,
+                signal_score=min(100, conviction * 100),
+            ))
+
+        return signals
+
+    def _scan_insider_buying(
+        self,
+        tickers: list[str],
+        vol: VolContext,
+        regime: str,
+    ) -> list[TradeSignal]:
+        """Sub-Strategy D: insider buying signal from SEC EDGAR Form 4.
+
+        CEO/CFO/director buying own stock is a strong conviction signal.
+        Cluster buys (2+ insiders in 30 days) are even stronger.
+        Hold 5-20 days.
+        """
+        signals: list[TradeSignal] = []
+        params = self.get_params(vol)
+
+        for ticker in tickers:
             try:
-                flow = data_fetcher.get_options_flow(ticker)
-                if not flow:
+                score_data = data_fetcher.get_insider_buying_score(ticker)
+                score = score_data.get("signal_score", 0)
+
+                if score < 30:
                     continue
-                # Future: parse sweep data, check premium thresholds,
-                # generate directional signals from institutional flow
+
+                if score_data.get("buy_count", 0) == 0:
+                    continue
+
+                price = data_fetcher.get_current_price(ticker)
+                if price is None or price <= 0:
+                    continue
+
+                direction = "long"
+                atr = self._get_atr(ticker)
+                stop_info = compute_stop(price, direction, atr, "catalyst", vol)
+
+                target_mult = 1 + params["target_return_pct"] / 100 * 0.8
+                target = price * target_mult
+
+                kelly = compute_adaptive_kelly(
+                    strategy="catalyst", vol=vol, regime=regime,
+                    trailing_trades=self.trailing_trades,
+                )
+                # Insider signals get conservative sizing
+                kelly_frac = kelly["kelly_fraction"] * 0.6
+                conviction = min(1.0, score / 100)
+
+                edge_parts = [
+                    f"Insider buying: {score_data['buy_count']} buy(s), "
+                    f"${score_data.get('total_buy_value', 0):,.0f} total value"
+                ]
+                if score_data.get("cluster_buy"):
+                    edge_parts.append("cluster buy (2+ insiders in 30d)")
+                if score_data.get("c_suite_buying"):
+                    edge_parts.append("C-suite buying (CEO/CFO)")
+
+                signals.append(TradeSignal(
+                    strategy=StrategyName.CATALYST,
+                    ticker=ticker,
+                    direction=direction,
+                    conviction=conviction,
+                    kelly_size_pct=kelly_frac * 100,
+                    entry_price=price,
+                    stop_loss=stop_info["stop_price"],
+                    target=round(target, 2),
+                    max_hold_days=20,
+                    edge_reason=". ".join(edge_parts) + ". Insiders have non-public conviction.",
+                    kill_condition=(
+                        f"Insider sells appear, or stop at {stop_info['stop_price']:.2f}, "
+                        f"or 20d time stop"
+                    ),
+                    expected_sharpe=1.2,
+                    signal_score=min(100, score),
+                ))
             except Exception:
-                logger.debug("Flow scan skipped for %s", ticker)
+                logger.debug("Insider scan failed for %s", ticker)
+
         return signals
 
     @staticmethod

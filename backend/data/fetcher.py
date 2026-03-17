@@ -66,11 +66,11 @@ class DataFetcher:
             data_cache.set(cache_key, data, ttl_hours=24.0)
         return data
 
-    def get_earnings_data(self, ticker: str) -> dict:
+    def get_earnings_data(self, ticker: str) -> list[dict]:
         cache_key = f"earnings:{ticker}"
         cached = data_cache.get(cache_key)
-        if cached is not None and isinstance(cached, dict):
-            return cached
+        if cached is not None and isinstance(cached, (dict, list)):
+            return cached if isinstance(cached, list) else [cached] if cached else []
 
         if settings.fmp_api_key:
             try:
@@ -82,7 +82,7 @@ class DataFetcher:
             except Exception:
                 logger.warning("FMP earnings fetch failed for %s", ticker)
 
-        return {}
+        return []
 
     def get_analyst_revisions(self, ticker: str) -> dict:
         if settings.finnhub_api_key:
@@ -119,6 +119,182 @@ class DataFetcher:
             except Exception:
                 logger.warning("Unusual Whales dark pool fetch failed for %s", ticker)
         return {}
+
+    def get_earnings_calendar(
+        self, from_date: str | None = None, to_date: str | None = None
+    ) -> list[dict]:
+        """Upcoming earnings dates from FMP (when key is set)."""
+        if settings.fmp_api_key:
+            try:
+                from backend.data.sources.fmp_src import fmp_source
+                return fmp_source.get_earnings_calendar(from_date, to_date)
+            except Exception:
+                logger.warning("FMP earnings calendar fetch failed")
+        return []
+
+    def get_earnings_surprises(self, ticker: str) -> list[dict]:
+        """Historical EPS surprises, preferring Finnhub > FMP > yfinance."""
+        if settings.finnhub_api_key:
+            try:
+                from backend.data.sources.finnhub_src import finnhub_source
+                data = finnhub_source.get_earnings_surprises(ticker)
+                if data:
+                    return data
+            except Exception:
+                logger.warning("Finnhub earnings surprises fetch failed for %s", ticker)
+
+        if settings.fmp_api_key:
+            try:
+                from backend.data.sources.fmp_src import fmp_source
+                data = fmp_source.get_eps_surprises(ticker)
+                if data:
+                    return data
+            except Exception:
+                logger.warning("FMP EPS surprises fetch failed for %s", ticker)
+
+        return yfinance_source.get_earnings_history(ticker)
+
+    def get_recommendation_trends(self, ticker: str) -> list[dict]:
+        """Analyst recommendation trends, preferring Finnhub > yfinance."""
+        if settings.finnhub_api_key:
+            try:
+                from backend.data.sources.finnhub_src import finnhub_source
+                data = finnhub_source.get_recommendation_trends(ticker)
+                if data:
+                    return data
+            except Exception:
+                logger.warning("Finnhub recommendation trends fetch failed for %s", ticker)
+
+        return yfinance_source.get_recommendation_trends(ticker)
+
+    # ── Macro / FRED ───────────────────────────────────────────
+
+    def get_yield_curve_slope(self) -> pd.Series:
+        """10Y-2Y yield spread from FRED (precise) or yfinance (fallback)."""
+        if settings.fred_api_key:
+            try:
+                from backend.data.sources.fred_src import fred_source
+                data = fred_source.get_yield_curve_slope()
+                if not data.empty:
+                    return data
+            except Exception:
+                logger.warning("FRED yield curve fetch failed, falling back to yfinance")
+
+        from backend.data.cross_asset import cross_asset_data
+        return cross_asset_data.compute_yield_curve_slope()
+
+    def get_credit_spread(self) -> pd.Series:
+        """High-yield OAS from FRED or HYG/LQD ratio fallback."""
+        if settings.fred_api_key:
+            try:
+                from backend.data.sources.fred_src import fred_source
+                data = fred_source.get_credit_spread()
+                if not data.empty:
+                    return data
+            except Exception:
+                logger.warning("FRED credit spread fetch failed, falling back")
+
+        from backend.data.cross_asset import cross_asset_data
+        return cross_asset_data.compute_credit_spread()
+
+    def get_macro_snapshot(self) -> dict[str, float | None]:
+        """Latest macro indicators from FRED (empty dict if no key)."""
+        if settings.fred_api_key:
+            try:
+                from backend.data.sources.fred_src import fred_source
+                return fred_source.get_macro_snapshot()
+            except Exception:
+                logger.warning("FRED macro snapshot fetch failed")
+        return {}
+
+    # ── Insider Trades / SEC EDGAR ─────────────────────────────
+
+    def get_insider_trades(self, ticker: str, days_back: int = 90) -> list[dict]:
+        """Insider transactions from SEC EDGAR Form 4 filings."""
+        cache_key = f"insider_trades:{ticker}"
+        cached = data_cache.get(cache_key)
+        if cached is not None and isinstance(cached, list):
+            return cached
+
+        if settings.sec_edgar_email:
+            try:
+                from backend.data.sources.edgar_src import edgar_source
+                data = edgar_source.get_insider_trades(ticker, days_back=days_back)
+                if data:
+                    data_cache.set(cache_key, data, ttl_hours=24.0)
+                return data
+            except Exception:
+                logger.warning("EDGAR insider trades fetch failed for %s", ticker)
+        return []
+
+    def get_insider_buying_score(self, ticker: str) -> dict:
+        """Composite insider buying signal from SEC EDGAR."""
+        cache_key = f"insider_score:{ticker}"
+        cached = data_cache.get(cache_key)
+        if cached is not None and isinstance(cached, dict):
+            return cached
+
+        if settings.sec_edgar_email:
+            try:
+                from backend.data.sources.edgar_src import edgar_source
+                data = edgar_source.score_insider_buying(ticker)
+                if data:
+                    data_cache.set(cache_key, data, ttl_hours=24.0)
+                return data
+            except Exception:
+                logger.warning("EDGAR insider score failed for %s", ticker)
+        return {"signal_score": 0, "transactions": []}
+
+    # ── Dark Pool / FINRA ATS ──────────────────────────────────
+
+    def get_dark_pool_activity(self, ticker: str) -> dict:
+        """Dark pool accumulation metrics from FINRA ATS data."""
+        cache_key = f"dark_pool_activity:{ticker}"
+        cached = data_cache.get(cache_key)
+        if cached is not None and isinstance(cached, dict):
+            return cached
+
+        try:
+            from backend.data.sources.finra_src import finra_source
+            data = finra_source.compute_dark_pool_metrics(ticker)
+            if data and data.get("signal_score", 0) > 0:
+                data_cache.set(cache_key, data, ttl_hours=24.0)
+            return data
+        except Exception:
+            logger.warning("FINRA dark pool fetch failed for %s", ticker)
+        return {"signal_score": 0}
+
+    # ── SteadyAPI Options Flow ─────────────────────────────────
+
+    def get_steadyapi_flow(self, ticker: str | None = None) -> list[dict]:
+        """Institutional options flow from SteadyAPI.
+
+        If ticker is provided, filters to that ticker only.
+        Otherwise returns all recent flow.
+        """
+        if not settings.enable_steadyapi or not settings.steadyapi_api_key:
+            return []
+
+        try:
+            from backend.data.sources.steadyapi_src import steadyapi_source
+            if ticker:
+                return steadyapi_source.get_flow_for_ticker(ticker)
+            return steadyapi_source.get_options_flow()
+        except Exception:
+            logger.warning("SteadyAPI flow fetch failed")
+        return []
+
+    def get_steadyapi_sweeps(self) -> list[dict]:
+        """Institutional sweep orders from SteadyAPI (strongest flow signal)."""
+        if not settings.enable_steadyapi or not settings.steadyapi_api_key:
+            return []
+
+        try:
+            from backend.data.sources.steadyapi_src import steadyapi_source
+            return steadyapi_source.get_institutional_sweeps()
+        except Exception:
+            logger.warning("SteadyAPI sweeps fetch failed")
+        return []
 
 
 data_fetcher = DataFetcher()

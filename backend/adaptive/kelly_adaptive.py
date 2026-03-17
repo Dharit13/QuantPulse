@@ -13,7 +13,7 @@ STRATEGY_CAPS = {
     "catalyst": 0.08,
     "cross_asset": 0.05,
     "flow": 0.04,
-    "gap_reversion": 0.03,
+    "intraday": 0.03,
 }
 
 

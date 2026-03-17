@@ -1,6 +1,8 @@
 import logging
+from io import StringIO
 
 import pandas as pd
+import requests
 
 from backend.data.cache import data_cache
 
@@ -9,6 +11,7 @@ logger = logging.getLogger(__name__)
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 CACHE_KEY = "sp500_constituents"
 CACHE_TTL_HOURS = 168  # 1 week
+_USER_AGENT = "QuantPulse/2.0 (https://github.com/quantpulse; contact@quantpulse.local)"
 
 
 def fetch_sp500_constituents() -> pd.DataFrame:
@@ -19,7 +22,9 @@ def fetch_sp500_constituents() -> pd.DataFrame:
         return cached
 
     try:
-        tables = pd.read_html(SP500_WIKI_URL, header=0)
+        resp = requests.get(SP500_WIKI_URL, headers={"User-Agent": _USER_AGENT}, timeout=15)
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text), header=0)
         df = tables[0]
         df = df.rename(columns={
             "Symbol": "ticker",
@@ -39,22 +44,6 @@ def fetch_sp500_constituents() -> pd.DataFrame:
     except Exception:
         logger.exception("Failed to fetch S&P 500 constituents")
         return pd.DataFrame(columns=["ticker", "name", "sector", "sub_industry"])
-
-
-def get_tickers_by_sector(sector: str) -> list[str]:
-    df = fetch_sp500_constituents()
-    return df[df["sector"] == sector]["ticker"].tolist()
-
-
-def get_tickers_by_sub_industry(sub_industry: str) -> list[str]:
-    df = fetch_sp500_constituents()
-    return df[df["sub_industry"] == sub_industry]["ticker"].tolist()
-
-
-def get_sector_groups() -> dict[str, list[str]]:
-    """Return {sector: [tickers]} mapping."""
-    df = fetch_sp500_constituents()
-    return df.groupby("sector")["ticker"].apply(list).to_dict()
 
 
 def get_sub_industry_groups() -> dict[str, list[str]]:
