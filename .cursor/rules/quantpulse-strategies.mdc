@@ -1,0 +1,29 @@
+---
+description: Strategy implementation patterns for QuantPulse trading strategies
+globs: "backend/strategies/**/*.py"
+alwaysApply: false
+---
+
+# Strategy Implementation Rules
+
+## Every Strategy Must
+1. Inherit from `backend.strategies.base.BaseStrategy`
+2. Accept `VolContext` in `generate_signals()` — all thresholds adapt to volatility
+3. Return `list[TradeSignal]` from `backend.models.schemas`
+4. Have an `edge_reason` (why the edge exists) and `kill_condition` (what invalidates it) on every signal
+
+## The Three Questions Test
+Before adding ANY signal, it must answer:
+1. **Why does this edge exist?** (behavioral bias, information lag, mechanical flow, regulatory constraint)
+2. **Why hasn't it been arbitraged away?** (capacity, capital requirement, holding period, execution difficulty)
+3. **What kills this edge?** (regime change, crowding, data loss, regulatory change)
+
+## Stop-Losses
+Always ATR-based via `backend.adaptive.stops.compute_stop()`. Never fixed percentage.
+
+## Position Sizing
+Always via `backend.adaptive.kelly_adaptive.compute_adaptive_kelly()`. Never equal-weight.
+
+## Strategy Registry
+Strategies are enabled/disabled via config flags (`ENABLE_STAT_ARB`, etc.).
+Paid-data strategies (flow_imbalance, gap_reversion intraday) degrade gracefully when data unavailable.

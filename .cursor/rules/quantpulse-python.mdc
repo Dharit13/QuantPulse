@@ -1,0 +1,37 @@
+---
+description: Python coding standards for QuantPulse backend and backtest modules
+globs: "backend/**/*.py,backtest/**/*.py,scripts/**/*.py,nlp/**/*.py"
+alwaysApply: false
+---
+
+# Python Standards
+
+## Imports
+- stdlib → third-party → local, separated by blank lines
+- Use absolute imports: `from backend.adaptive.vol_context import VolContext`
+
+## Adaptive Parameters
+Every trading parameter must accept a `VolContext` object. Never hardcode:
+```python
+# BAD
+entry_z = 2.0
+
+# GOOD
+entry_z = 2.0 * max(0.8, min(2.5, vol.vol_scale))
+```
+
+## Error Handling
+- Data fetches: catch, log, return cached/fallback data. Never crash on API failure.
+- Strategy signals: if data is missing, skip the signal (return empty list), don't raise.
+
+## Type Hints
+- All function signatures fully typed including return type.
+- Use `list[X]`, `dict[K, V]` (Python 3.11+ syntax), not `List`, `Dict`.
+
+## Data Models
+- Input/output of API endpoints: Pydantic `BaseModel` from `backend/models/schemas.py`.
+- Internal data: pandas DataFrames for time series, dataclasses for config objects.
+
+## Testing
+- Test files mirror source: `backend/strategies/stat_arb.py` → `tests/test_strategies/test_stat_arb.py`
+- Use pytest. Fixtures for shared data (price series, vol context).
