@@ -6,6 +6,7 @@ Dynamically discovers volatile stocks from:
   3. Finnhub company news tickers (stocks in the news = potential catalysts)
 
 No hardcoded watchlists — everything is discovered fresh on each scan.
+Every pick is auto-logged to the signal audit / shadow book.
 """
 
 from __future__ import annotations
@@ -22,11 +23,13 @@ from fastapi import APIRouter, Query
 from backend.data.cache import data_cache
 from backend.data.fetcher import DataFetcher
 from backend.data.sources.yfinance_src import yfinance_source
+from backend.tracker.signal_audit import SignalAuditor
 
 router = APIRouter(prefix="/swing", tags=["swing_picks"])
 logger = logging.getLogger(__name__)
 _fetcher = DataFetcher()
 _executor = ThreadPoolExecutor(max_workers=3)
+_auditor = SignalAuditor()
 
 
 def _get_yfinance_movers() -> list[str]:
@@ -348,6 +351,46 @@ def _build_swing_summary(
     return " ".join(parts)
 
 
+def _log_swing_picks_to_shadow_book(picks: list[dict]) -> None:
+    """Auto-log swing picks to the signal audit trail as phantom trades."""
+    from backend.models.schemas import PhantomTrade, StrategyName, TradeSignal
+    from backend.tracker.trade_journal import TradeJournal
+
+    journal = TradeJournal()
+    for pick in picks:
+        try:
+            sig = TradeSignal(
+                strategy=StrategyName.INTRADAY,
+                ticker=pick["ticker"],
+                direction=pick.get("direction", "long"),
+                conviction=pick.get("score", 50) / 100,
+                kelly_size_pct=1.0,
+                entry_price=pick["entry"],
+                stop_loss=pick["stop"],
+                target=pick["target"],
+                max_hold_days=10,
+                edge_reason=pick.get("catalyst", "swing pick"),
+                kill_condition=f"Stop at {pick['stop']} or time stop",
+                expected_sharpe=1.0,
+                signal_score=pick.get("score", 50),
+            )
+            _auditor.log_signal(sig, acted_on=False)
+            phantom = PhantomTrade(
+                ticker=pick["ticker"],
+                direction=pick.get("direction", "long"),
+                strategy=StrategyName.INTRADAY,
+                signal_score=pick.get("score", 50),
+                signal_date=date.today(),
+                entry_price_suggested=pick["entry"],
+                stop_suggested=pick["stop"],
+                target_suggested=pick["target"],
+                pass_reason="auto-logged (swing pick)",
+            )
+            journal.log_phantom(phantom)
+        except Exception:
+            logger.debug("Failed to shadow-log swing pick for %s", pick.get("ticker"))
+
+
 def _run_swing_scan(min_return_pct: float, max_hold_days: int) -> dict:
     """Scan the full universe for swing picks (runs in thread pool)."""
     universe = _get_scan_universe()
@@ -429,6 +472,9 @@ def _run_scan_background(min_return_pct: float, max_hold_days: int) -> None:
 
         quick_trades.sort(key=lambda x: x["score"], reverse=True)
         swing_trades.sort(key=lambda x: x["score"], reverse=True)
+
+        all_picks = quick_trades[:15] + swing_trades[:15]
+        _log_swing_picks_to_shadow_book(all_picks)
 
         result_data = {
             "quick_trades": quick_trades[:15],

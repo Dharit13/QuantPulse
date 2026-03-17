@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     # ── Strategy Enable/Disable ──
     enable_stat_arb: bool = True
     enable_catalyst: bool = True
-    enable_cross_asset: bool = True
+    enable_cross_asset: bool = False
+    cross_asset_overlay_only: bool = True
     enable_flow: bool = False
     enable_gap_reversion: bool = False
 
@@ -34,8 +35,12 @@ class Settings(BaseSettings):
     max_position_pct: float = 0.08
     max_gross_exposure: float = 2.0
     max_drawdown_pct: float = 0.15
-    kelly_fraction: float = 0.5
     tail_hedge_pct: float = 0.03
+
+    # ── Position Sizing ──
+    # "quarter_kelly" (conservative default), "half_kelly", "equal_risk"
+    sizing_mode: str = "quarter_kelly"
+    equal_risk_per_trade_pct: float = 0.01
 
     # ── Execution Mode ──
     execution_mode: str = "advisory"
