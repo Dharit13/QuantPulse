@@ -8,10 +8,16 @@ class Settings(BaseSettings):
     polygon_api_key: str = ""
     uw_api_key: str = ""
     quiver_api_key: str = ""
+    steadyapi_api_key: str = ""
+    fred_api_key: str = ""
+
+    # ── Contact (SEC EDGAR requires User-Agent with email) ──
+    sec_edgar_email: str = ""
 
     # ── Feature Flags ──
     enable_polygon: bool = False
     enable_smart_money: bool = False
+    enable_steadyapi: bool = False
     enable_quiver: bool = False
     enable_intraday: bool = False
     paper_trade_mode: bool = True

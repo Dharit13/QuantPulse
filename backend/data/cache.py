@@ -31,7 +31,8 @@ class DataCache:
         expires = datetime.utcnow() + timedelta(hours=ttl_hours)
 
         if isinstance(value, pd.DataFrame):
-            serialized = json.dumps({"__type__": "dataframe", "data": value.to_dict()})
+            df_reset = value.reset_index(drop=False)
+            serialized = json.dumps({"__type__": "dataframe", "data": df_reset.to_dict()}, default=str)
         else:
             serialized = json.dumps(value, default=str)
 

@@ -7,7 +7,7 @@ Rules:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.adaptive.vol_context import VolContext
 from backend.adaptive.weight_interpolation import compute_regime_transition_weights
@@ -44,7 +44,7 @@ class RegimeTracker:
             "stat_arb": 0.20, "catalyst": 0.20, "momentum": 0.20,
             "flow": 0.15, "intraday": 0.15, "cash": 0.10,
         }
-        self.regime_start: datetime = datetime.utcnow()
+        self.regime_start: datetime = datetime.now(timezone.utc)
         self.history: list[dict] = []
 
     def update(
@@ -90,17 +90,17 @@ class RegimeTracker:
             "candidate_regime": self.candidate_regime,
             "candidate_days": self.candidate_days,
             "current_weights": self.current_weights,
-            "days_in_regime": (datetime.utcnow() - self.regime_start).days,
+            "days_in_regime": (datetime.now(timezone.utc) - self.regime_start).days,
         }
 
     def _switch_regime(self, new_regime: Regime) -> None:
         self.history.append({
             "from": self.current_regime.value,
             "to": new_regime.value,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Regime switch: %s -> %s", self.current_regime.value, new_regime.value)
         self.current_regime = new_regime
         self.candidate_regime = None
         self.candidate_days = 0
-        self.regime_start = datetime.utcnow()
+        self.regime_start = datetime.now(timezone.utc)

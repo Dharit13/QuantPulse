@@ -23,6 +23,7 @@ env/
 
 .idea/
 .vscode/
+.cursor/plans/
 
 *.log
 logs/

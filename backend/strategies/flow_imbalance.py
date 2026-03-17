@@ -1,15 +1,15 @@
-"""Microstructure & Flow Imbalance Strategy — institutional flow trading.
+"""Flow Imbalance Strategy — simplified for swing trading ($15/mo stack).
 
-Orchestrates three sub-strategies driven by market microstructure:
-  A) GEX Pin Risk — mean-revert near positive-GEX strikes, momentum near negative
-  B) Dark Pool Level Trading — trade pullbacks to institutional support/resistance
-  C) Unusual Options Sweep — follow large institutional directional bets
+Rewritten for swing trading (3-10 day hold) using:
+  A) SteadyAPI Options Flow — follow large institutional sweeps/blocks ($15/mo)
+  B) FINRA ATS Dark Pool — detect institutional accumulation from delayed volume data (free)
 
-ALL sub-strategies require paid data (Unusual Whales, Polygon).  When those
-flags are disabled the strategy returns no signals and degrades gracefully.
+Skipped (day-trading only):
+  - GEX/gamma pinning (intraday phenomenon, needs real-time options chain greeks)
+  - Real-time dark pool prints (needs Unusual Whales $50/mo)
 
 Position sizing: 2-4% per trade, max 10% total flow exposure.
-Expected hold: 2-10 days.
+Expected hold: 3-10 days.
 
 Reference: QUANTPULSE_FINAL_SPEC.md §7
 """
@@ -28,14 +28,6 @@ from backend.config import settings
 from backend.data.fetcher import data_fetcher
 from backend.data.universe import fetch_sp500_constituents
 from backend.models.schemas import StrategyName, TradeSignal
-from backend.signals.microstructure import (
-    DarkPoolProfile,
-    GEXProfile,
-    UnusualVolumeSignal,
-    compute_dark_pool_levels,
-    compute_gex_profile,
-    scan_universe_for_flow,
-)
 from backend.strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
@@ -44,9 +36,16 @@ MAX_STRATEGY_EXPOSURE_PCT = 0.10
 MAX_POSITION_PCT = 0.04
 MAX_SIGNALS_PER_SCAN = 8
 
+MIN_SWEEP_PREMIUM = 500_000
+MIN_DARK_POOL_SCORE = 40.0
+
 
 class FlowImbalanceStrategy(BaseStrategy):
-    """Institutional flow imbalance trading strategy."""
+    """Institutional flow imbalance trading strategy (swing-optimized).
+
+    Uses SteadyAPI options flow ($15/mo) and free FINRA dark pool data
+    instead of Polygon GEX and Unusual Whales.
+    """
 
     def __init__(self) -> None:
         self.trailing_trades: list[dict] = []
@@ -63,10 +62,10 @@ class FlowImbalanceStrategy(BaseStrategy):
         vol: VolContext,
         **kwargs,
     ) -> list[TradeSignal]:
-        """Generate trade signals from microstructure analysis.
+        """Generate trade signals from institutional flow analysis.
 
         kwargs:
-            tickers: optional list[str] to scan (defaults to S&P 500 top-100 by volume)
+            tickers: optional list[str] to scan (defaults to S&P 500 top-100)
             regime: current regime string for Kelly computation
         """
         regime = kwargs.get("regime", "bull_trend")
@@ -82,7 +81,7 @@ class FlowImbalanceStrategy(BaseStrategy):
         signals: list[TradeSignal] = []
         cumulative_exposure = 0.0
 
-        # Sub-Strategy C first — sweep detection scans the full universe
+        # Sub-Strategy A: SteadyAPI institutional sweep detection
         sweep_signals = self._generate_sweep_signals(tickers, vol, regime, params)
         for sig in sweep_signals:
             if cumulative_exposure >= MAX_STRATEGY_EXPOSURE_PCT:
@@ -91,29 +90,15 @@ class FlowImbalanceStrategy(BaseStrategy):
                 signals.append(sig)
                 cumulative_exposure += sig.kelly_size_pct / 100
 
-        # Sub-Strategies A & B — GEX + dark pool on tickers that had flow activity,
-        # plus the top-volume tickers
-        gex_dp_tickers = [s.ticker for s in signals] + tickers[:30]
-        seen = set()
-        gex_dp_tickers = [t for t in gex_dp_tickers if t not in seen and not seen.add(t)]
-
-        for ticker in gex_dp_tickers:
+        # Sub-Strategy B: FINRA dark pool accumulation
+        dp_tickers = [t for t in tickers[:50] if not any(s.ticker == t for s in signals)]
+        dp_signals = self._generate_dark_pool_signals(dp_tickers, vol, regime, params)
+        for sig in dp_signals:
             if cumulative_exposure >= MAX_STRATEGY_EXPOSURE_PCT:
                 break
-
-            # Sub-Strategy A: GEX
-            gex_sig = self._generate_gex_signal(ticker, vol, regime, params)
-            if gex_sig and self.validate_signal(gex_sig):
-                if not any(s.ticker == ticker for s in signals):
-                    signals.append(gex_sig)
-                    cumulative_exposure += gex_sig.kelly_size_pct / 100
-
-            # Sub-Strategy B: Dark Pool
-            dp_sig = self._generate_dark_pool_signal(ticker, vol, regime, params)
-            if dp_sig and self.validate_signal(dp_sig):
-                if not any(s.ticker == ticker and s.direction == dp_sig.direction for s in signals):
-                    signals.append(dp_sig)
-                    cumulative_exposure += dp_sig.kelly_size_pct / 100
+            if self.validate_signal(sig):
+                signals.append(sig)
+                cumulative_exposure += sig.kelly_size_pct / 100
 
         signals.sort(key=lambda s: s.conviction, reverse=True)
         signals = signals[:MAX_SIGNALS_PER_SCAN]
@@ -121,173 +106,7 @@ class FlowImbalanceStrategy(BaseStrategy):
         logger.info("Flow imbalance strategy generated %d signals", len(signals))
         return signals
 
-    # ── Sub-Strategy A: GEX Pin Risk ─────────────────────────────────────
-
-    def _generate_gex_signal(
-        self,
-        ticker: str,
-        vol: VolContext,
-        regime: str,
-        params: dict,
-    ) -> TradeSignal | None:
-        """GEX-based mean-reversion or momentum signal."""
-        if not settings.enable_polygon:
-            return None
-
-        gex = compute_gex_profile(ticker, vol)
-        if gex is None or not gex.levels:
-            return None
-
-        spot = gex.spot_price
-
-        if gex.is_positive_gex_environment and gex.nearest_pin is not None:
-            # Positive GEX = pinning: mean-revert toward nearest pin
-            pin_distance_pct = (gex.nearest_pin - spot) / spot
-            if abs(pin_distance_pct) < 0.005:
-                return None  # already at pin
-
-            direction = "long" if pin_distance_pct > 0 else "short"
-            target = gex.nearest_pin
-            edge = (
-                f"GEX pinning: net GEX={gex.net_gex_total:,.0f}, "
-                f"nearest pin at {gex.nearest_pin:.2f} ({pin_distance_pct:+.1%} away). "
-                f"MM hedging dampens moves — mean-revert toward pin."
-            )
-            kill = (
-                f"GEX profile flips negative (regime change), "
-                f"or price breaks through pin by >{abs(pin_distance_pct)*2:.1%}"
-            )
-            conviction = min(1.0, abs(pin_distance_pct) * 10 + 0.3)
-
-        elif not gex.is_positive_gex_environment and gex.flip_price is not None:
-            # Negative GEX = acceleration: momentum trade away from flip
-            flip_distance_pct = (spot - gex.flip_price) / spot
-            if abs(flip_distance_pct) < 0.003:
-                return None
-
-            direction = "long" if flip_distance_pct > 0 else "short"
-            target = spot * (1.03 if direction == "long" else 0.97)
-            edge = (
-                f"Negative GEX regime: net GEX={gex.net_gex_total:,.0f}, "
-                f"flip at {gex.flip_price:.2f}. "
-                f"MM hedging amplifies moves — momentum trade."
-            )
-            kill = (
-                f"GEX flips positive (pinning restored), "
-                f"or price reverses through flip at {gex.flip_price:.2f}"
-            )
-            conviction = min(1.0, abs(flip_distance_pct) * 8 + 0.25)
-
-        else:
-            return None
-
-        atr = self._get_atr(ticker)
-        stop_info = compute_stop(spot, direction, atr, "flow", vol)
-
-        kelly = compute_adaptive_kelly(
-            strategy="flow",
-            vol=vol,
-            regime=regime,
-            trailing_trades=self.trailing_trades,
-        )
-        position_pct = min(kelly["kelly_fraction"], MAX_POSITION_PCT * vol.position_scale)
-
-        return TradeSignal(
-            strategy=StrategyName.FLOW,
-            ticker=ticker,
-            direction=direction,
-            conviction=conviction,
-            kelly_size_pct=position_pct * 100,
-            entry_price=spot,
-            stop_loss=stop_info["stop_price"],
-            target=round(target, 2),
-            max_hold_days=params["max_hold_days"],
-            edge_reason=edge,
-            kill_condition=kill,
-            expected_sharpe=1.3,
-            signal_score=min(100, conviction * 100),
-        )
-
-    # ── Sub-Strategy B: Dark Pool Levels ─────────────────────────────────
-
-    def _generate_dark_pool_signal(
-        self,
-        ticker: str,
-        vol: VolContext,
-        regime: str,
-        params: dict,
-    ) -> TradeSignal | None:
-        """Trade pullbacks to dark pool support/resistance clusters."""
-        if not settings.enable_smart_money:
-            return None
-
-        dp = compute_dark_pool_levels(ticker, vol)
-        if dp is None or not dp.levels:
-            return None
-
-        spot = dp.spot_price
-
-        # Look for price sitting near a high-significance dark pool level
-        for level in dp.levels:
-            if level.significance < 0.3:
-                continue
-
-            distance_pct = (spot - level.price_level) / spot
-            if abs(distance_pct) > 0.02:
-                continue  # too far from level
-
-            if level.side == "buy" and distance_pct < 0:
-                # Price pulling back toward institutional buy cluster
-                direction = "long"
-                target = spot * 1.03
-            elif level.side == "sell" and distance_pct > 0:
-                # Price rallying toward institutional sell cluster
-                direction = "short"
-                target = spot * 0.97
-            else:
-                continue
-
-            atr = self._get_atr(ticker)
-            stop_info = compute_stop(spot, direction, atr, "flow", vol)
-
-            kelly = compute_adaptive_kelly(
-                strategy="flow",
-                vol=vol,
-                regime=regime,
-                trailing_trades=self.trailing_trades,
-            )
-            position_pct = min(kelly["kelly_fraction"], MAX_POSITION_PCT * vol.position_scale)
-
-            conviction = min(1.0, level.significance + abs(distance_pct) * 20)
-
-            return TradeSignal(
-                strategy=StrategyName.FLOW,
-                ticker=ticker,
-                direction=direction,
-                conviction=conviction,
-                kelly_size_pct=position_pct * 100,
-                entry_price=spot,
-                stop_loss=stop_info["stop_price"],
-                target=round(target, 2),
-                max_hold_days=params["max_hold_days"],
-                edge_reason=(
-                    f"Dark pool {level.side} cluster at {level.price_level:.2f} "
-                    f"(${level.total_notional:,.0f} notional, {level.print_count} prints, "
-                    f"significance={level.significance:.2f}). "
-                    f"Institutional S/R not visible on public charts."
-                ),
-                kill_condition=(
-                    f"Price breaks through dark pool level by >1.5%, "
-                    f"or new dark pool prints invalidate the level, "
-                    f"or stop hit at {stop_info['stop_price']:.2f}"
-                ),
-                expected_sharpe=1.2,
-                signal_score=min(100, conviction * 100),
-            )
-
-        return None
-
-    # ── Sub-Strategy C: Sweep / Unusual Options Volume ───────────────────
+    # ── Sub-Strategy A: SteadyAPI Institutional Sweeps ────────────────────
 
     def _generate_sweep_signals(
         self,
@@ -296,24 +115,67 @@ class FlowImbalanceStrategy(BaseStrategy):
         regime: str,
         params: dict,
     ) -> list[TradeSignal]:
-        """Detect unusual options sweeps and follow institutional direction."""
-        if not settings.enable_smart_money:
+        """Detect institutional sweep orders via SteadyAPI and generate signals.
+
+        Sweeps hit multiple exchanges simultaneously, indicating urgency.
+        Combined with BuyToOpen label, this is a strong directional bet.
+        """
+        if not settings.enable_steadyapi or not settings.steadyapi_api_key:
             return []
 
-        flow_signals = scan_universe_for_flow(tickers, vol, max_results=20)
+        sweeps = data_fetcher.get_steadyapi_sweeps()
+        if not sweeps:
+            return []
+
+        ticker_set = set(t.upper() for t in tickers)
         trade_signals: list[TradeSignal] = []
 
-        for fs in flow_signals:
-            if fs.direction == "neutral":
+        # Group sweeps by ticker and compute net directional flow
+        ticker_flow: dict[str, dict] = {}
+        for sweep in sweeps:
+            sym = sweep.get("symbol", "")
+            if sym not in ticker_set:
                 continue
 
-            direction = "long" if fs.direction == "bullish" else "short"
+            premium = sweep.get("premium", 0)
+            if premium < MIN_SWEEP_PREMIUM:
+                continue
 
-            spot = data_fetcher.get_current_price(fs.ticker)
+            if sym not in ticker_flow:
+                ticker_flow[sym] = {
+                    "call_premium": 0.0, "put_premium": 0.0,
+                    "sweep_count": 0, "top_sweeps": [],
+                }
+            entry = ticker_flow[sym]
+            entry["sweep_count"] += 1
+
+            if sweep.get("option_type") == "Call":
+                entry["call_premium"] += premium
+            else:
+                entry["put_premium"] += premium
+
+            entry["top_sweeps"].append(sweep)
+
+        for ticker, flow in ticker_flow.items():
+            net_premium = flow["call_premium"] - flow["put_premium"]
+            total_premium = flow["call_premium"] + flow["put_premium"]
+
+            if total_premium < MIN_SWEEP_PREMIUM:
+                continue
+
+            # Determine direction from premium skew
+            if flow["call_premium"] > flow["put_premium"] * 2:
+                direction = "long"
+            elif flow["put_premium"] > flow["call_premium"] * 2:
+                direction = "short"
+            else:
+                continue  # skip ambiguous flow
+
+            spot = data_fetcher.get_current_price(ticker)
             if spot is None or spot <= 0:
                 continue
 
-            atr = self._get_atr(fs.ticker)
+            atr = self._get_atr(ticker)
             stop_info = compute_stop(spot, direction, atr, "flow", vol)
 
             kelly = compute_adaptive_kelly(
@@ -329,19 +191,19 @@ class FlowImbalanceStrategy(BaseStrategy):
             else:
                 target = spot - stop_info["stop_distance_dollars"] * 2.5
 
-            sweep_desc = ""
-            if fs.sweeps:
-                top_sweep = max(fs.sweeps, key=lambda s: s.premium)
-                sweep_desc = (
-                    f" Top sweep: {top_sweep.contract_type} ${top_sweep.strike:.0f} "
-                    f"({top_sweep.expiry_days}d DTE, ${top_sweep.premium:,.0f} premium)."
-                )
+            conviction = min(1.0, total_premium / 2_000_000 + flow["sweep_count"] / 10)
 
-            conviction = min(1.0, fs.confidence)
+            # Build edge description from top sweep
+            top_sweep = max(flow["top_sweeps"], key=lambda s: s.get("premium", 0))
+            sweep_desc = (
+                f"${top_sweep.get('premium', 0):,.0f} {top_sweep.get('option_type', '')} "
+                f"sweep at ${top_sweep.get('strike', 0):.0f} "
+                f"({top_sweep.get('dte', 0)}d DTE)"
+            )
 
             signal = TradeSignal(
                 strategy=StrategyName.FLOW,
-                ticker=fs.ticker,
+                ticker=ticker,
                 direction=direction,
                 conviction=conviction,
                 kelly_size_pct=position_pct * 100,
@@ -350,14 +212,14 @@ class FlowImbalanceStrategy(BaseStrategy):
                 target=round(target, 2),
                 max_hold_days=params["max_hold_days"],
                 edge_reason=(
-                    f"Unusual options volume: {fs.volume_ratio:.1f}x avg "
-                    f"(C/P ratio={fs.call_put_ratio:.2f}, "
-                    f"net premium=${fs.net_premium:,.0f}).{sweep_desc} "
-                    f"Institutional time-sensitive directional bet."
+                    f"Institutional sweep flow: {flow['sweep_count']} sweeps, "
+                    f"${total_premium:,.0f} total premium "
+                    f"(call=${flow['call_premium']:,.0f} / put=${flow['put_premium']:,.0f}). "
+                    f"Top: {sweep_desc}. "
+                    f"Sweeps indicate urgency — institutional directional bet."
                 ),
                 kill_condition=(
-                    f"Options volume normalizes (<1.5x avg), "
-                    f"or net premium reverses direction, "
+                    f"Flow reverses direction (puts overtake calls or vice versa), "
                     f"or stop hit at {stop_info['stop_price']:.2f}, "
                     f"or {params['max_hold_days']}d time stop"
                 ),
@@ -367,6 +229,82 @@ class FlowImbalanceStrategy(BaseStrategy):
 
             if self.validate_signal(signal):
                 trade_signals.append(signal)
+
+        return trade_signals
+
+    # ── Sub-Strategy B: FINRA Dark Pool Accumulation ──────────────────────
+
+    def _generate_dark_pool_signals(
+        self,
+        tickers: list[str],
+        vol: VolContext,
+        regime: str,
+        params: dict,
+    ) -> list[TradeSignal]:
+        """Detect institutional accumulation from FINRA ATS dark pool data.
+
+        Stocks with persistently rising dark pool volume suggest institutional
+        buying not visible on lit exchanges — a swing-timeframe signal.
+        """
+        trade_signals: list[TradeSignal] = []
+
+        for ticker in tickers:
+            try:
+                metrics = data_fetcher.get_dark_pool_activity(ticker)
+                if metrics.get("signal_score", 0) < MIN_DARK_POOL_SCORE:
+                    continue
+
+                spot = data_fetcher.get_current_price(ticker)
+                if spot is None or spot <= 0:
+                    continue
+
+                direction = "long"  # dark pool accumulation is a buy signal
+                atr = self._get_atr(ticker)
+                stop_info = compute_stop(spot, direction, atr, "flow", vol)
+
+                kelly = compute_adaptive_kelly(
+                    strategy="flow",
+                    vol=vol,
+                    regime=regime,
+                    trailing_trades=self.trailing_trades,
+                )
+                # Dark pool signals get conservative sizing (delayed data)
+                position_pct = min(kelly["kelly_fraction"] * 0.7, MAX_POSITION_PCT * vol.position_scale)
+                target = spot + stop_info["stop_distance_dollars"] * 2.0
+
+                zscore = metrics.get("volume_zscore", 0)
+                weeks_inc = metrics.get("weeks_increasing", 0)
+                conviction = min(1.0, metrics["signal_score"] / 100)
+
+                signal = TradeSignal(
+                    strategy=StrategyName.FLOW,
+                    ticker=ticker,
+                    direction=direction,
+                    conviction=conviction,
+                    kelly_size_pct=position_pct * 100,
+                    entry_price=spot,
+                    stop_loss=stop_info["stop_price"],
+                    target=round(target, 2),
+                    max_hold_days=min(params["max_hold_days"], 15),
+                    edge_reason=(
+                        f"Dark pool accumulation: volume z-score={zscore:.1f}, "
+                        f"{weeks_inc} consecutive weeks increasing, "
+                        f"avg weekly ATS volume={metrics.get('avg_weekly_volume', 0):,}. "
+                        f"Institutional buying not visible on lit exchanges."
+                    ),
+                    kill_condition=(
+                        f"Dark pool volume drops below 1σ (z<1.0), "
+                        f"or stop hit at {stop_info['stop_price']:.2f}, "
+                        f"or price breaks below 20-day SMA"
+                    ),
+                    expected_sharpe=1.1,
+                    signal_score=min(100, conviction * 100),
+                )
+
+                if self.validate_signal(signal):
+                    trade_signals.append(signal)
+            except Exception:
+                logger.debug("Dark pool signal failed for %s", ticker)
 
         return trade_signals
 

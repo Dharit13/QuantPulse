@@ -30,7 +30,7 @@ def get_recent_earnings(ticker: str) -> list[dict]:
     if settings.fmp_api_key:
         fmp_data = data_fetcher.get_earnings_data(ticker)
         if fmp_data:
-            return [fmp_data] if isinstance(fmp_data, dict) else fmp_data
+            return fmp_data
 
     return yfinance_source.get_earnings_history(ticker)
 

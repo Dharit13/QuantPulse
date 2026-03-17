@@ -102,11 +102,12 @@ class StatArbStrategy(BaseStrategy):
     def generate_signals(self, vol: VolContext, **kwargs) -> list[TradeSignal]:
         """Generate trade signals for all active pairs."""
         params = self.get_params(vol)
+        regime = kwargs.get("regime", "bull_choppy")
         signals = []
 
         for pair in self.active_pairs:
             try:
-                signal = self._evaluate_pair(pair, vol, params)
+                signal = self._evaluate_pair(pair, vol, params, regime=regime)
                 if signal and self.validate_signal(signal):
                     signals.append(signal)
             except Exception:
@@ -119,6 +120,7 @@ class StatArbStrategy(BaseStrategy):
         pair: dict,
         vol: VolContext,
         params: dict,
+        regime: str = "bull_choppy",
     ) -> TradeSignal | None:
         """Evaluate a single pair for entry/exit signals."""
         t1, t2 = pair["ticker_a"], pair["ticker_b"]
@@ -168,7 +170,7 @@ class StatArbStrategy(BaseStrategy):
         kelly = compute_adaptive_kelly(
             strategy="stat_arb",
             vol=vol,
-            regime=kwargs.get("regime", "bull_choppy") if "kwargs" in dir() else "bull_choppy",
+            regime=regime,
             trailing_trades=self.trailing_trades,
         )
 

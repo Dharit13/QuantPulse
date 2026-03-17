@@ -1,15 +1,29 @@
+"""QuantPulse v2 — FastAPI application.
+
+Mounts the API router, initializes the database, and configures
+the APScheduler for all recurring calibration and monitoring jobs.
+"""
+
 from contextlib import asynccontextmanager
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.api.router import api_router
 from backend.models.database import init_db
+from backend.scheduler import register_all_jobs
+
+scheduler = BackgroundScheduler()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    register_all_jobs(scheduler)
+    scheduler.start()
     yield
+    scheduler.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -26,6 +40,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(api_router)
 
 
 @app.get("/health")
