@@ -34,6 +34,7 @@ class FMPSource:
     def __init__(self) -> None:
         self._api_key = settings.fmp_api_key
         self._client: httpx.Client | None = None
+        self._quota_exhausted = False
 
     @property
     def _http(self) -> httpx.Client:
@@ -45,13 +46,18 @@ class FMPSource:
         return self._client
 
     def _enabled(self) -> bool:
-        return bool(self._api_key)
+        return bool(self._api_key) and not self._quota_exhausted
 
     def _get(self, path: str, params: dict | None = None) -> list | dict:
         """Rate-limited GET with api key injection. Returns parsed JSON.
 
         Handles 402/403 (paid-only) and 429 (rate-limited) gracefully.
+        After the first 429 exhaustion, skips all further FMP calls for
+        the session to avoid wasting time on retries.
         """
+        if self._quota_exhausted:
+            return []
+
         params = dict(params or {})
         params["apikey"] = self._api_key
         try:
@@ -68,7 +74,8 @@ class FMPSource:
                 logger.debug("FMP %s requires paid plan (HTTP %d)", path, exc.response.status_code)
                 return []
             if exc.response.status_code == 429:
-                logger.warning("FMP %s rate-limited after retries, falling back to yfinance", path)
+                self._quota_exhausted = True
+                logger.warning("FMP daily quota exhausted — disabling FMP for this session")
                 return []
             raise
 
