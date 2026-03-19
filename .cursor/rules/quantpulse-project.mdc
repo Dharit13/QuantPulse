@@ -10,7 +10,7 @@ Multi-strategy quantitative trading ADVISORY system (signal generator + decision
 Does NOT place trades, connect to brokers, or move money. Human-in-the-loop only.
 
 ## Architecture
-- **Stack**: Python 3.11+ / FastAPI (backend) / Streamlit (frontend) / SQLite (dev) / PostgreSQL (prod)
+- **Stack**: Python 3.11+ / FastAPI (backend) / Next.js (frontend) / Supabase (PostgreSQL)
 - **5 Strategies**: stat_arb, catalyst_event, cross_asset_momentum, flow_imbalance, gap_reversion
 - **Core Engines**: Regime Detection, Adaptive Parameters, Kelly Sizing, Risk Management, Portfolio Construction
 - **Spec**: `QUANTPULSE_FINAL_SPEC.md` (sections 1-22, 2435 lines) — the source of truth
