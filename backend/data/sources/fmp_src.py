@@ -3,8 +3,8 @@
 Enable by setting FMP_API_KEY in .env.
 Provides: company fundamentals, analyst estimates, historical OHLCV, financial ratios.
 
-FMP free tier: 250 requests/day. Uses `/stable/` endpoints (v3 is deprecated).
-Rate limiter registered as "fmp" at ~4 req/min.
+FMP Starter plan: 300 requests/min. Uses `/stable/` endpoints (v3 is deprecated).
+Rate limiter registered as "fmp" at 5 req/s (300/min).
 Docs: https://intelligence.financialmodelingprep.com/developer/docs
 """
 

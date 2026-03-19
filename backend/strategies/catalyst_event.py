@@ -169,8 +169,8 @@ class CatalystEventStrategy(BaseStrategy):
                                     (low - prev_close).abs()
                                 ], axis=1).max(axis=1)
                                 atr = float(tr.mean())
-                                stop_price = round(price * 0.85, 2)
-                                target_price = round(price * 1.30, 2)
+                                stop_price = round(max(0.01, price - atr * 2), 2)
+                                target_price = round(price + atr * 3, 2)
                                 conviction = min(1.0, score / 100)
                                 buy_count = score_data["buy_count"]
                                 buy_val = score_data.get("total_buy_value", 0)
@@ -200,7 +200,7 @@ class CatalystEventStrategy(BaseStrategy):
                                     stop_loss=stop_price,
                                     target=target_price, max_hold_days=365,
                                     edge_reason=". ".join(edge_parts) + ".",
-                                    kill_condition=f"Insider sells appear, or if it drops below ${stop_price:.2f} (-15%), re-evaluate",
+                                    kill_condition=f"Insider sells appear, or if it drops below ${stop_price:.2f} (2x ATR stop), re-evaluate",
                                     expected_sharpe=1.2, signal_score=min(100, score),
                                 ))
                 except Exception:

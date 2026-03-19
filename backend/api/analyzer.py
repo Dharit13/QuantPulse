@@ -124,6 +124,9 @@ def _build_system_take(
     regime: str,
     ticker: str = "",
     signals: list | None = None,
+    short_interest: list | None = None,
+    institutional: dict | None = None,
+    dcf: dict | None = None,
 ) -> dict:
     """Generate an opinionated system assessment.
 
@@ -134,6 +137,9 @@ def _build_system_take(
     ai_result = ai_system_take(
         ticker, technicals, fundamentals, regime,
         [s.model_dump() if hasattr(s, "model_dump") else s for s in (signals or [])],
+        dcf=dcf,
+        short_interest=short_interest,
+        institutional=institutional,
     )
     if ai_result is not None:
         return ai_result
@@ -209,9 +215,55 @@ def _build_system_take(
         notes.append(f"Market regime is {regime.replace('_', ' ')} — elevated risk, prefer smaller sizing")
         score -= 10
 
+    # Short interest scoring
+    if short_interest and len(short_interest) >= 2:
+        latest = short_interest[0]
+        previous = short_interest[1]
+        dtc = latest.get("days_to_cover", 0)
+        curr_si = latest.get("short_interest", 0)
+        prev_si = previous.get("short_interest", 0)
+
+        if dtc > 5:
+            notes.append(f"Short interest is high ({dtc:.1f} days to cover) — crowded short, squeeze risk")
+            score += 5
+        elif dtc > 3:
+            notes.append(f"Moderate short interest ({dtc:.1f} days to cover)")
+
+        if prev_si > 0:
+            si_change = (curr_si - prev_si) / prev_si * 100
+            if si_change > 10:
+                notes.append(f"Short interest increasing ({si_change:+.0f}%) — bears piling in")
+                score -= 5
+            elif si_change < -10:
+                notes.append(f"Short interest decreasing ({si_change:+.0f}%) — shorts covering, bullish")
+                score += 5
+
+    # Institutional holdings scoring
+    if institutional and institutional.get("active_positions"):
+        active = institutional["active_positions"]
+        increased = active.get("increased_positions", {}).get("holders", 0)
+        decreased = active.get("decreased_positions", {}).get("holders", 0)
+
+        if increased > 0 and decreased > 0:
+            ratio = increased / decreased
+            if ratio > 1.3:
+                notes.append(f"Institutions net buying ({increased} increased vs {decreased} decreased positions)")
+                score += 8
+            elif ratio < 0.7:
+                notes.append(f"Institutions net selling ({decreased} decreased vs {increased} increased positions)")
+                score -= 8
+            else:
+                notes.append(f"Institutional activity mixed ({increased} increased, {decreased} decreased)")
+
+        new_sold = institutional.get("new_sold_positions", {})
+        new_pos = new_sold.get("new_positions", {}).get("holders", 0)
+        sold_out = new_sold.get("sold_out_positions", {}).get("holders", 0)
+        if new_pos > sold_out * 2:
+            notes.append(f"New institutional buyers ({new_pos}) far exceed sold-out ({sold_out})")
+            score += 5
+
     score = max(0, min(100, score))
 
-    # Plain-English summary for non-quant users
     summary = _build_plain_english_summary(
         technicals, fundamentals, bias, score, regime
     )
@@ -442,6 +494,7 @@ def _build_trade_plan(
     regime: str,
     capital: float,
     strategy_signals: list | None = None,
+    short_interest: list | None = None,
 ) -> dict:
     """Generate a concrete trade plan: buy/wait/avoid, entry, stop, target, sizing.
 
@@ -496,9 +549,9 @@ def _build_trade_plan(
         entry = 0
         entry_note = "No entry recommended"
 
-    # ── Stop loss: 2x ATR below entry
+    # ── Stop loss: 2x ATR below entry (floored at $0.01)
     stop_distance = round(atr * 2, 2)
-    stop = round(entry - stop_distance, 2) if entry > 0 else 0
+    stop = round(max(0.01, entry - stop_distance), 2) if entry > 0 else 0
     stop_pct = round(stop_distance / entry * 100, 1) if entry > 0 else 0
 
     # ── Targets: ATR-based + analyst target
@@ -544,7 +597,8 @@ def _build_trade_plan(
             else:
                 time_to_50pct = f"~{months:.0f} months — unlikely from this stock alone, consider options or higher-beta alternatives"
 
-    # ── Position sizing: buy as many shares as the budget allows
+    # ── Position sizing: risk-based (risk 2% of capital per trade)
+    RISK_PER_TRADE_PCT = 0.02
     sizing_note = ""
     if entry > 0 and stop > 0:
         risk_per_share = entry - stop
@@ -555,11 +609,24 @@ def _build_trade_plan(
                 f"1 share costs ${entry:,.0f} which exceeds your ${capital:,.0f} budget. "
                 f"Consider fractional shares, a lower-priced stock, or increasing your budget."
             )
+        elif risk_per_share <= 0:
+            shares = 0
+            sizing_note = "Stop is at or above entry — cannot compute risk-based sizing."
         else:
-            shares = int(capital / entry)
+            risk_dollars = capital * RISK_PER_TRADE_PCT
+            shares = int(risk_dollars / risk_per_share)
             if shares < 1:
-                shares = 0
+                shares = 1 if entry <= capital else 0
+            max_position = int(capital / entry)
+            if shares > max_position:
+                shares = max_position
+            if shares < 1:
                 sizing_note = f"Budget too small for even 1 share at ${entry:,.2f}."
+
+            sizing_note = (
+                f"Risking {RISK_PER_TRADE_PCT:.0%} of capital (${risk_dollars:,.0f}) per trade. "
+                f"Max loss per share: ${risk_per_share:,.2f}."
+            )
 
         position_value = round(shares * entry, 2) if shares > 0 else 0
         position_pct = round(position_value / capital * 100, 1) if shares > 0 else 0
@@ -743,7 +810,48 @@ def _build_trade_plan(
             "days_to_target": days_to_target,
             "sell_window": sell_window,
         },
+        "short_squeeze_warning": _short_squeeze_note(short_interest),
     }
+
+
+def _short_squeeze_note(short_interest: list | None) -> str | None:
+    """Generate a squeeze warning if short interest is dangerously high."""
+    if not short_interest or len(short_interest) < 1:
+        return None
+    dtc = short_interest[0].get("days_to_cover", 0)
+    if dtc > 8:
+        return (
+            f"Extremely high short interest ({dtc:.1f} days to cover). "
+            f"If the stock rallies, shorts will be forced to buy — triggering a squeeze. "
+            f"This amplifies both upside potential and volatility. Use tight stops."
+        )
+    if dtc > 5:
+        return (
+            f"Elevated short interest ({dtc:.1f} days to cover). "
+            f"A positive catalyst could trigger short covering and a sharp move higher."
+        )
+    return None
+
+
+def _get_cached_regime_and_vol() -> tuple | None:
+    """Use pipeline-cached regime (includes FRED data) and compute vol context.
+
+    The pipeline regime is more accurate because it includes FRED yield curve
+    and credit spread data. We use the cached regime directly instead of
+    recomputing it without FRED.
+    """
+    from backend.data.cache import data_cache
+    cached = data_cache.get("pipeline:regime")
+    if not cached or not isinstance(cached, dict) or "regime" not in cached:
+        return None
+    try:
+        regime = Regime(cached["regime"])
+        vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
+        spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+        vol = compute_vol_context(spy_df, vix_df)
+        return regime, vol
+    except Exception:
+        return None
 
 
 def _analyze_sync(ticker: str, capital: float) -> dict:
@@ -752,12 +860,15 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
     if ohlcv.empty:
         raise ValueError(f"No data for {ticker}")
 
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
-
-    regime_result = detect_regime(vix_df, spy_df)
-    regime = regime_result["regime"]
-    vol = compute_vol_context(spy_df, vix_df)
+    cached_rv = _get_cached_regime_and_vol()
+    if cached_rv:
+        regime, vol = cached_rv
+    else:
+        vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+        spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
+        regime_result = detect_regime(vix_df, spy_df)
+        regime = regime_result["regime"]
+        vol = compute_vol_context(spy_df, vix_df)
 
     technicals = _compute_technicals(ohlcv)
     fundamentals = _fetcher.get_fundamentals(ticker)
@@ -777,18 +888,26 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
     except Exception as e:
         logger.debug("CrossAsset skipped for %s: %s", ticker, e)
 
+    short_interest = _fetcher.get_short_interest(ticker)
+    institutional = _fetcher.get_institutional_holdings(ticker)
+
+    from backend.signals.dcf import compute_dcf
+    dcf = compute_dcf(ticker, _fetcher)
+
     system_take = _build_system_take(
         technicals, fundamentals or {}, regime.value,
         ticker=ticker, signals=signals,
+        short_interest=short_interest,
+        institutional=institutional,
+        dcf=dcf,
     )
 
     trade_plan = _build_trade_plan(
         ticker, technicals, fundamentals or {}, system_take, regime.value, capital,
         strategy_signals=signals,
+        short_interest=short_interest,
     )
 
-    # Reconcile: if strong strategy signals conflict with the technical verdict,
-    # upgrade the trade plan to reflect the tension
     if signals and trade_plan["action"] in ("AVOID", "HOLD OFF — NO EDGE"):
         best_signal = max(signals, key=lambda s: s.signal_score or 0)
         if (best_signal.signal_score or 0) >= 70:
@@ -807,9 +926,6 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
                 ),
             }
 
-    from backend.signals.dcf import compute_dcf
-    dcf = compute_dcf(ticker, _fetcher)
-
     return {
         "ticker": ticker,
         "current_price": technicals["current_price"],
@@ -819,6 +935,8 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
         "technicals": technicals,
         "fundamentals": fundamentals or {},
         "dcf_valuation": dcf,
+        "short_interest": short_interest[:5] if short_interest else [],
+        "institutional_holdings": institutional,
         "system_take": system_take,
         "trade_plan": trade_plan,
     }

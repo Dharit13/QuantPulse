@@ -27,6 +27,20 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).info("Startup: cleared %d expired cache entries", cleared)
     register_all_jobs(scheduler)
     scheduler.start()
+
+    import threading
+    def _warmup():
+        import logging
+        log = logging.getLogger(__name__)
+        log.info("Startup: warming pipeline cache in background...")
+        try:
+            from backend.pipeline import refresh_all
+            refresh_all()
+            log.info("Startup: pipeline cache warm")
+        except Exception as e:
+            log.warning("Startup: pipeline warmup failed: %s", e)
+    threading.Thread(target=_warmup, daemon=True).start()
+
     yield
     scheduler.shutdown(wait=False)
 

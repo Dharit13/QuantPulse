@@ -232,7 +232,7 @@ rate_limiter = RateLimiter()
 
 # ── Pre-register known sources ──
 rate_limiter.register("steadyapi", tokens_per_second=12, burst=15)  # 15/s limit, slight safety margin
-rate_limiter.register("fmp", tokens_per_second=0.067, burst=2)       # 250/day ≈ 4/min → 1 req every ~15s
+rate_limiter.register("fmp", tokens_per_second=5, burst=10)           # Starter plan: 300/min → 5/s
 rate_limiter.register("finnhub", tokens_per_second=1, burst=5)      # 60/min
 rate_limiter.register("fred", tokens_per_second=2, burst=5)         # 120/min
 rate_limiter.register("edgar", tokens_per_second=8, burst=10)       # 10/sec SEC policy

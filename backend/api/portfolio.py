@@ -21,9 +21,22 @@ _journal = TradeJournal(fetcher=_fetcher)
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
-@router.get("/state", response_model=PortfolioState)
-async def get_portfolio_state() -> PortfolioState:
-    """Current portfolio state including active trades and risk metrics."""
+@router.get("/state")
+async def get_portfolio_state(
+    refresh: bool = False,
+) -> dict:
+    """Current portfolio state from pipeline cache (instant) or live."""
+    if not refresh:
+        from backend.data.cache import data_cache
+        cached = data_cache.get("pipeline:portfolio")
+        if cached and isinstance(cached, dict):
+            return cached
+
+    from backend.pipeline import refresh_portfolio
+    result = refresh_portfolio()
+    if result:
+        return result
+
     vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
     spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
     regime_result = detect_regime(vix_df, spy_df)
@@ -63,18 +76,21 @@ async def get_portfolio_state() -> PortfolioState:
         strats = [t for t in _journal.get_closed_trades(strategy=s)]
         strategy_pnl[s] = sum(t.pnl_dollars or 0 for t in strats)
 
-    return PortfolioState(
-        regime=regime,
-        regime_confidence=confidence,
-        gross_exposure=round(gross, 4),
-        net_exposure=round(net, 4),
-        daily_var=0.0,
-        current_drawdown_pct=0.0,
-        active_trades=active_signals,
-        strategy_pnl=strategy_pnl,
-        total_pnl_ytd=summary.get("total_pnl_dollars", 0),
-        portfolio_sharpe_30d=0.0,
-    )
+    return {
+        "data": PortfolioState(
+            regime=regime,
+            regime_confidence=confidence,
+            gross_exposure=round(gross, 4),
+            net_exposure=round(net, 4),
+            daily_var=0.0,
+            current_drawdown_pct=0.0,
+            active_trades=active_signals,
+            strategy_pnl=strategy_pnl,
+            total_pnl_ytd=summary.get("total_pnl_dollars", 0),
+            portfolio_sharpe_30d=0.0,
+        ).model_dump(mode="json"),
+        "refreshed_at": datetime.utcnow().isoformat(),
+    }
 
 
 @router.get("/alerts")
@@ -225,11 +241,19 @@ def _build_quick_portfolio(capital: float) -> dict:
 @router.get("/quick-allocate")
 async def quick_allocate(
     capital: float = Query(default=1000.0, ge=10.0, le=10_000_000.0),
+    refresh: bool = Query(False, description="Force live computation, bypass pipeline cache"),
 ) -> dict:
-    """Synchronous version. Use /quick-allocate/start + /quick-allocate/status for async."""
+    """Quick portfolio allocation from pipeline cache or live."""
+    if not refresh:
+        from backend.data.cache import data_cache
+        cached = data_cache.get("portfolio:last_result")
+        if cached and isinstance(cached, dict):
+            return {"data": cached, "refreshed_at": cached.get("timestamp", datetime.utcnow().isoformat())}
+
     import asyncio
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_executor, _build_quick_portfolio, capital)
+    result = await loop.run_in_executor(_executor, _build_quick_portfolio, capital)
+    return {"data": result, "refreshed_at": datetime.utcnow().isoformat()}
 
 
 # ── Background portfolio build ──

@@ -118,24 +118,6 @@ class DataFetcher:
                 logger.warning("Finnhub news fetch failed for %s", ticker)
         return []
 
-    def get_options_flow(self, ticker: str) -> dict:
-        if settings.enable_smart_money and settings.uw_api_key:
-            try:
-                from backend.data.sources.unusual_whales_src import uw_source
-                return uw_source.get_options_flow(ticker)
-            except Exception:
-                logger.warning("Unusual Whales flow fetch failed for %s", ticker)
-        return {}
-
-    def get_dark_pool(self, ticker: str) -> dict:
-        if settings.enable_smart_money and settings.uw_api_key:
-            try:
-                from backend.data.sources.unusual_whales_src import uw_source
-                return uw_source.get_dark_pool(ticker)
-            except Exception:
-                logger.warning("Unusual Whales dark pool fetch failed for %s", ticker)
-        return {}
-
     def get_earnings_calendar(
         self, from_date: str | None = None, to_date: str | None = None
     ) -> list[dict]:
@@ -147,28 +129,6 @@ class DataFetcher:
             except Exception:
                 logger.warning("FMP earnings calendar fetch failed")
         return []
-
-    def get_earnings_surprises(self, ticker: str) -> list[dict]:
-        """Historical EPS surprises, preferring Finnhub > FMP > yfinance."""
-        if settings.finnhub_api_key:
-            try:
-                from backend.data.sources.finnhub_src import finnhub_source
-                data = finnhub_source.get_earnings_surprises(ticker)
-                if data:
-                    return data
-            except Exception:
-                logger.warning("Finnhub earnings surprises fetch failed for %s", ticker)
-
-        if settings.fmp_api_key:
-            try:
-                from backend.data.sources.fmp_src import fmp_source
-                data = fmp_source.get_eps_surprises(ticker)
-                if data:
-                    return data
-            except Exception:
-                logger.warning("FMP EPS surprises fetch failed for %s", ticker)
-
-        return yfinance_source.get_earnings_history(ticker)
 
     def get_recommendation_trends(self, ticker: str) -> list[dict]:
         """Analyst recommendation trends, preferring Finnhub > yfinance."""
@@ -212,16 +172,6 @@ class DataFetcher:
 
         from backend.data.cross_asset import cross_asset_data
         return cross_asset_data.compute_credit_spread()
-
-    def get_macro_snapshot(self) -> dict[str, float | None]:
-        """Latest macro indicators from FRED (empty dict if no key)."""
-        if settings.fred_api_key:
-            try:
-                from backend.data.sources.fred_src import fred_source
-                return fred_source.get_macro_snapshot()
-            except Exception:
-                logger.warning("FRED macro snapshot fetch failed")
-        return {}
 
     # ── Insider Trades / SEC EDGAR ─────────────────────────────
 
@@ -282,24 +232,6 @@ class DataFetcher:
 
     # ── SteadyAPI Options Flow ─────────────────────────────────
 
-    def get_steadyapi_flow(self, ticker: str | None = None) -> list[dict]:
-        """Institutional options flow from SteadyAPI.
-
-        If ticker is provided, filters to that ticker only.
-        Otherwise returns all recent flow.
-        """
-        if not settings.enable_steadyapi or not settings.steadyapi_api_key:
-            return []
-
-        try:
-            from backend.data.sources.steadyapi_src import steadyapi_source
-            if ticker:
-                return steadyapi_source.get_flow_for_ticker(ticker)
-            return steadyapi_source.get_options_flow()
-        except Exception:
-            logger.warning("SteadyAPI flow fetch failed")
-        return []
-
     def get_steadyapi_sweeps(self) -> list[dict]:
         """Institutional sweep orders from SteadyAPI (strongest flow signal)."""
         if not settings.enable_steadyapi or not settings.steadyapi_api_key:
@@ -311,6 +243,47 @@ class DataFetcher:
         except Exception:
             logger.warning("SteadyAPI sweeps fetch failed")
         return []
+
+
+    def get_short_interest(self, ticker: str) -> list[dict]:
+        """Short interest history from SteadyAPI (Stock Market API)."""
+        if not settings.steadyapi_api_key:
+            return []
+
+        cache_key = f"short_interest:{ticker}"
+        cached = data_cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            from backend.data.sources.steadyapi_src import steadyapi_source
+            data = steadyapi_source.get_short_interest(ticker)
+            if data:
+                data_cache.set(cache_key, data, ttl_hours=24.0)
+            return data
+        except Exception:
+            logger.warning("Short interest fetch failed for %s", ticker)
+        return []
+
+    def get_institutional_holdings(self, ticker: str) -> dict:
+        """Institutional holdings from SteadyAPI (Stock Market API)."""
+        if not settings.steadyapi_api_key:
+            return {}
+
+        cache_key = f"inst_holdings:{ticker}"
+        cached = data_cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            from backend.data.sources.steadyapi_src import steadyapi_source
+            data = steadyapi_source.get_institutional_holdings(ticker)
+            if data:
+                data_cache.set(cache_key, data, ttl_hours=24.0)
+            return data
+        except Exception:
+            logger.warning("Institutional holdings fetch failed for %s", ticker)
+        return {}
 
 
 data_fetcher = DataFetcher()
