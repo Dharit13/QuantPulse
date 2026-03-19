@@ -88,6 +88,29 @@ class YFinanceSource:
             logger.exception("Failed to get fundamentals for %s", ticker)
             return {}
 
+    def get_cashflow(self, ticker: str) -> pd.DataFrame:
+        """Annual cash flow statement. Rows include 'Free Cash Flow',
+        'Operating Cash Flow', 'Capital Expenditure', etc."""
+        try:
+            t = yf.Ticker(ticker)
+            cf = t.cashflow
+            if cf is None or cf.empty:
+                return pd.DataFrame()
+            return cf
+        except Exception:
+            logger.exception("Failed to get cash flow for %s", ticker)
+            return pd.DataFrame()
+
+    def get_shares_outstanding(self, ticker: str) -> int | None:
+        """Shares outstanding from yfinance info."""
+        try:
+            t = yf.Ticker(ticker)
+            info = t.info
+            return info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
+        except Exception:
+            logger.exception("Failed to get shares outstanding for %s", ticker)
+            return None
+
     def get_options_chain(self, ticker: str, expiry: str | None = None) -> dict:
         try:
             t = yf.Ticker(ticker)

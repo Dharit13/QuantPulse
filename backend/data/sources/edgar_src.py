@@ -294,20 +294,45 @@ class EDGARSource:
             for t in buys
         )
 
-        # Composite scoring
+        # Composite scoring — calibrated so typical insider activity scores
+        # 40-60, and only exceptional activity reaches 80+.
         score = 0.0
+
+        # Buy count: diminishing returns — 1 buy is common, 5+ is notable
         if buys:
-            score += min(30.0, len(buys) * 10.0)
-        if buy_value > 100_000:
-            score += min(25.0, buy_value / 100_000 * 5.0)
-        if cluster_buy:
+            score += min(20.0, len(buys) * 3.0)
+
+        # Buy value: $100k is routine for execs, $1M+ is meaningful
+        if buy_value > 1_000_000:
             score += 20.0
+        elif buy_value > 500_000:
+            score += 15.0
+        elif buy_value > 100_000:
+            score += 8.0
+        elif buy_value > 0:
+            score += 3.0
+
+        # Cluster buying is a strong signal
+        if cluster_buy:
+            score += 15.0
+
+        # C-suite buying is meaningful but common in S&P 500
         if c_suite_buying:
-            score += 25.0
+            score += 15.0
+
+        # Recency boost: buying in last 7 days is much stronger
+        week_cutoff = (date.today() - timedelta(days=7)).isoformat()
+        recent_buys = [t for t in buys if t["filing_date"] >= week_cutoff]
+        if recent_buys:
+            score += 10.0
+
+        # Net buying vs selling ratio
         if sell_value > 0 and buy_value > sell_value * 2:
             score += 10.0
         elif sells and not buys:
             score = max(0, score - 20.0)
+        elif sell_value > buy_value:
+            score = max(0, score - 10.0)
 
         return {
             "buy_count": len(buys),

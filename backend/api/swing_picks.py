@@ -81,17 +81,13 @@ def _get_finnhub_news_tickers() -> list[str]:
 def _get_scan_universe() -> list[str]:
     """Build dynamic scan universe — no hardcoded lists.
 
-    Sources:
+    Sources (fetched in parallel):
       1. S&P 500 constituents (always available via Wikipedia cache)
       2. yfinance market movers (today's most active, gainers, losers)
       3. Finnhub news tickers (stocks in the headlines)
-
-    All tickers are deduplicated. Delisted/invalid tickers are skipped
-    gracefully during the scan phase.
     """
     tickers: set[str] = set()
 
-    # S&P 500 universe
     try:
         from backend.data.universe import get_all_tickers
         sp500 = get_all_tickers()
@@ -100,13 +96,11 @@ def _get_scan_universe() -> list[str]:
     except Exception:
         logger.debug("Failed to load S&P 500 universe")
 
-    # Today's market movers (dynamic — changes every day)
-    movers = _get_yfinance_movers()
-    tickers.update(movers)
-
-    # Tickers in the news (dynamic — catalyst-driven)
-    news_tickers = _get_finnhub_news_tickers()
-    tickers.update(news_tickers)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        movers_future = pool.submit(_get_yfinance_movers)
+        news_future = pool.submit(_get_finnhub_news_tickers)
+        tickers.update(movers_future.result())
+        tickers.update(news_future.result())
 
     logger.info("Total scan universe: %d unique tickers", len(tickers))
     return list(tickers)
@@ -115,7 +109,7 @@ def _get_scan_universe() -> list[str]:
 def _analyze_ticker_for_swing(ticker: str, max_hold_days: int, min_return_pct: float) -> dict | None:
     """Analyze a single ticker for swing trade potential."""
     try:
-        df = yfinance_source.get_daily_ohlcv(ticker, period="3mo")
+        df = DataFetcher().get_daily_ohlcv(ticker, period="3mo", live=True)
         if df.empty or len(df) < 20:
             return None
 
@@ -180,32 +174,39 @@ def _analyze_ticker_for_swing(ticker: str, max_hold_days: int, min_return_pct: f
         # Bearish short: broken trend, high RSI, rejection from resistance
         direction = "long"
         if ret_5d < -5 and rsi < 35 and price < sma_20:
-            direction = "long"  # oversold bounce play
-            catalyst_type = "Oversold bounce"
+            direction = "long"
+            catalyst_type = "Beaten down, due for a bounce"
         elif ret_5d > 5 and vol_ratio > 1.5:
-            direction = "long"  # momentum continuation
-            catalyst_type = "Momentum breakout"
+            direction = "long"
+            catalyst_type = "Climbing fast with heavy buying"
         elif rsi < 30:
             direction = "long"
-            catalyst_type = "RSI oversold reversal"
+            catalyst_type = "Stock dropped hard, likely to recover"
         elif ret_1d > 3 and vol_ratio > 2:
-            direction = "long"  # gap-up continuation
-            catalyst_type = "Volume surge"
+            direction = "long"
+            catalyst_type = "Big jump today on heavy trading"
         elif vol_ratio > 3:
             direction = "long"
-            catalyst_type = "Extreme volume spike"
+            catalyst_type = "Unusual amount of trading activity"
         else:
-            catalyst_type = "High ATR setup"
+            catalyst_type = "Big daily price swings"
 
         # Entry, stop, target
         entry = round(price, 2)
 
+        # Target based on each stock's actual ATR volatility, not a flat %
+        realistic_return = min(projected_return, 150.0)
+        realistic_return = max(realistic_return, min_return_pct)
+
+        # Also respect technical resistance as a cap for longs
         if direction == "long":
             stop = round(price - atr * 2, 2)
-            target = round(price * (1 + min_return_pct / 100), 2)
+            atr_target = round(price * (1 + realistic_return / 100), 2)
+            res_target = round(resistance_20d * 1.02, 2) if resistance_20d > price else atr_target
+            target = round(max(atr_target, res_target), 2)
         else:
             stop = round(price + atr * 2, 2)
-            target = round(price * (1 - min_return_pct / 100), 2)
+            target = round(price * (1 - realistic_return / 100), 2)
 
         stop_pct = abs(entry - stop) / entry * 100
         target_return = abs(target - entry) / entry * 100
@@ -215,32 +216,61 @@ def _analyze_ticker_for_swing(ticker: str, max_hold_days: int, min_return_pct: f
         days_needed = max(1, int(min_return_pct / (atr_pct * 0.6)))
         if days_needed <= 3:
             hold_bucket = "quick"
-            hold_label = f"1-3 days"
+            hold_days_num = days_needed
         else:
             hold_bucket = "swing"
-            hold_label = f"{min(days_needed, 3)}-{min(days_needed + 3, max_hold_days)} days"
+            hold_days_num = min(days_needed + 2, max_hold_days)
+        hold_label = f"{hold_days_num} days"
 
         # Exit window (specific dates)
         exit_by_date = (date.today() + timedelta(days=days_needed + 2)).strftime("%a %b %d")
         exit_window = f"Sell by {exit_by_date} or when target hit"
 
-        # Scoring: combine momentum, volume, ATR feasibility, RSI setup
+        # Scoring: feasibility + quality of setup + momentum confirmation
         score = 0.0
-        score += min(25, projected_return / min_return_pct * 15)  # feasibility
-        if vol_ratio > 2:
+
+        # Feasibility: can the stock actually move this much? (ATR projection)
+        score += min(20, projected_return / min_return_pct * 12)
+
+        # Risk/reward quality (most important for swing trades)
+        if rr_ratio > 3:
             score += 20
-        elif vol_ratio > 1.5:
-            score += 10
-        if 25 < rsi < 40:
-            score += 15  # oversold bounce setup
-        elif ret_5d > 8:
-            score += 15  # strong momentum
-        if rr_ratio > 2:
+        elif rr_ratio > 2:
             score += 15
         elif rr_ratio > 1.5:
             score += 10
+
+        # Volume confirmation
+        if vol_ratio > 2:
+            score += 15
+        elif vol_ratio > 1.5:
+            score += 10
+        elif vol_ratio > 1.2:
+            score += 5
+
+        # Setup quality: RSI + trend alignment
+        if 25 < rsi < 40:
+            score += 12  # oversold bounce — high-quality entry
+        elif 40 <= rsi < 60:
+            score += 8   # neutral RSI — room to run
+        elif ret_5d > 8:
+            score += 10  # strong momentum
+
+        # Trend alignment: price above key MAs is bullish
+        if direction == "long":
+            if price > sma_50:
+                score += 8
+            if price > sma_20:
+                score += 5
+
+        # Proximity to support (buying near support = better entry)
+        if direction == "long" and dist_from_low < 5:
+            score += 8
+
+        # Today's momentum confirmation
         if ret_1d > 2:
-            score += 10  # today's momentum
+            score += 7
+
         score = min(100, score)
 
         if score < 30:
@@ -259,7 +289,7 @@ def _analyze_ticker_for_swing(ticker: str, max_hold_days: int, min_return_pct: f
         try:
             insider = _fetcher.get_insider_buying_score(ticker)
             if insider.get("signal_score", 0) > 30:
-                insider_note = f" + Insider buying (score {insider['signal_score']:.0f})"
+                insider_note = " + Insider buying"
                 score = min(100, score + 10)
         except Exception:
             pass
@@ -273,7 +303,7 @@ def _analyze_ticker_for_swing(ticker: str, max_hold_days: int, min_return_pct: f
 
         return {
             "ticker": ticker,
-            "price": price,
+            "price": round(price, 2),
             "direction": direction,
             "entry": entry,
             "stop": stop,
@@ -282,7 +312,8 @@ def _analyze_ticker_for_swing(ticker: str, max_hold_days: int, min_return_pct: f
             "return_pct": round(target_return, 1),
             "risk_reward": round(rr_ratio, 1),
             "hold_bucket": hold_bucket,
-            "hold_days": hold_label,
+            "hold_days": hold_days_num,
+            "hold_label": hold_label,
             "exit_window": exit_window,
             "atr_pct": round(atr_pct, 1),
             "rsi": round(rsi, 0),
@@ -303,50 +334,62 @@ def _build_swing_summary(
     rsi: float, atr_pct: float, vol_ratio: float, catalyst: str,
     direction: str, target: float, stop: float, hold_label: str, days_needed: int,
 ) -> str:
-    """Short plain-English analysis for a swing pick."""
+    """Plain-English analysis for a swing pick — zero finance jargon."""
     parts: list[str] = []
 
-    # What's happening
     if ret_1d > 3:
-        parts.append(f"{ticker} is surging today (+{ret_1d:.1f}%) with {vol_ratio:.1f}x normal volume.")
+        parts.append(f"{ticker} jumped {ret_1d:.1f}% today with way more trading activity than usual.")
     elif ret_1d > 0.5:
-        parts.append(f"{ticker} is up {ret_1d:+.1f}% today.")
+        parts.append(f"{ticker} is up slightly today ({ret_1d:+.1f}%).")
     elif ret_1d < -3:
-        parts.append(f"{ticker} is selling off today ({ret_1d:+.1f}%).")
+        parts.append(f"{ticker} dropped {abs(ret_1d):.1f}% today.")
     else:
-        parts.append(f"{ticker} is roughly flat today.")
+        parts.append(f"{ticker} barely moved today.")
 
-    # Why this setup
-    if "Oversold bounce" in catalyst:
-        parts.append(f"It's down {ret_5d:+.1f}% this week and RSI is at {rsi:.0f} — oversold. Historically, stocks this oversold bounce within 3-5 days.")
+    if "Oversold bounce" in catalyst or "RSI oversold" in catalyst:
+        parts.append(
+            f"The stock has been beaten down {abs(ret_5d):.0f}% this week — "
+            f"like a clearance sale price. Stocks that drop this hard usually "
+            f"bounce back within a few days."
+        )
     elif "Momentum breakout" in catalyst:
-        parts.append(f"It's up {ret_5d:+.1f}% this week on heavy volume — momentum is building and likely continues.")
-    elif "Volume surge" in catalyst:
-        parts.append(f"Volume is {vol_ratio:.1f}x average — big players are moving in. When volume spikes like this, the move usually has legs.")
-    elif "RSI oversold" in catalyst:
-        parts.append(f"RSI at {rsi:.0f} is deeply oversold. This stock moves {atr_pct:.1f}% per day on average — a bounce could be sharp.")
+        parts.append(
+            f"It's been climbing {ret_5d:+.1f}% this week and big buyers are piling in. "
+            f"When a stock gets this kind of attention, the run usually keeps going."
+        )
+    elif "Volume surge" in catalyst or "Extreme volume" in catalyst:
+        parts.append(
+            f"Way more people are buying and selling this stock than normal — "
+            f"{vol_ratio:.0f}x the usual activity. That usually means something big is happening."
+        )
     else:
-        parts.append(f"This stock moves {atr_pct:.1f}% per day on average — enough volatility for a big swing.")
+        parts.append(
+            f"This stock moves a lot day-to-day (about {atr_pct:.0f}% per day), "
+            f"which means there's a real chance for a big swing."
+        )
 
-    # The trade
+    if "Insider buying" in catalyst:
+        parts.append(
+            "The company's own executives are buying shares with their own money — "
+            "they know the business better than anyone, and they think it's cheap right now."
+        )
+
     gain_pct = abs(target - price) / price * 100
     loss_pct = abs(stop - price) / price * 100
     parts.append(
-        f"Buy at ${price:.2f}, target ${target:.2f} (+{gain_pct:.0f}%), stop at ${stop:.2f} (-{loss_pct:.0f}%). "
-        f"Hold for {hold_label}."
+        f"If it works out, you could make about {gain_pct:.0f}% in {hold_label}. "
+        f"If it goes the wrong way, cut your losses at -{loss_pct:.0f}% — don't hold and hope."
     )
 
-    # Risk warning
     if atr_pct > 6:
-        parts.append("This is an extremely volatile stock — it can move 5-10% in a single day. Size very small (1% of capital max).")
+        parts.append(
+            "Fair warning: this stock can swing 5-10% in a single day. "
+            "Only put in money you're genuinely okay losing."
+        )
     else:
-        parts.append("This is a high-risk trade. Don't bet more than 1-2% of your capital.")
-
-    # If you need capital
-    parts.append(
-        f"If you need the capital sooner, sell if you're up 10-15% — don't wait for the full target. "
-        f"If it goes against you and hits ${stop:.2f}, exit immediately — no hoping."
-    )
+        parts.append(
+            "This is a risky bet — don't put in more than a small amount you can afford to lose."
+        )
 
     return " ".join(parts)
 
@@ -440,13 +483,62 @@ _scan_state: dict = {
     "progress": 0,        # tickers scanned so far
     "total": 0,           # total tickers to scan
     "result": None,       # scan results when done
+    "result_timestamp": None,
     "started_at": None,
     "error": None,
 }
 
 
+def _ai_rerank(candidates: list[dict]) -> list[dict] | None:
+    """Send candidates to Claude for AI ranking. Returns re-ordered list or None on failure."""
+    if not candidates:
+        return None
+    try:
+        from backend.ai.market_ai import ai_rank_swing_picks
+        from backend.regime.detector import detect_regime
+
+        spy_df = _fetcher.get_daily_ohlcv("SPY", period="3mo", live=True)
+        vix_df = _fetcher.get_daily_ohlcv("^VIX", period="3mo", live=True)
+        regime_result = detect_regime(vix_df, spy_df)
+        regime = regime_result.get("regime", "unknown")
+
+        ai_result = ai_rank_swing_picks(regime, candidates[:30])
+        if not ai_result or "ranked" not in ai_result:
+            logger.info("AI ranking returned no results, using hardcoded scores")
+            return None
+
+        ranked_list = ai_result["ranked"]
+        ticker_map = {c["ticker"]: c for c in candidates}
+        reordered: list[dict] = []
+
+        for item in ranked_list:
+            ticker = item.get("ticker", "")
+            if ticker not in ticker_map:
+                continue
+            pick = ticker_map.pop(ticker)
+            pick["score"] = item.get("score", pick["score"])
+            if item.get("analysis"):
+                pick["analysis"] = item["analysis"]
+            reordered.append(pick)
+
+        for leftover in ticker_map.values():
+            reordered.append(leftover)
+
+        return reordered
+    except Exception as e:
+        logger.warning("AI ranking failed, falling back to hardcoded scores: %s", e)
+        return None
+
+
+_SCAN_WORKERS = 12
+
+
 def _run_scan_background(min_return_pct: float, max_hold_days: int) -> None:
-    """Run scan and store results in _scan_state (called from thread pool)."""
+    """Run scan and store results in _scan_state (called from thread pool).
+
+    Uses a parallel thread pool to analyze tickers concurrently since each
+    ticker analysis is I/O-bound (yfinance HTTP calls).
+    """
     global _scan_state
     try:
         _scan_state["status"] = "scanning"
@@ -455,30 +547,48 @@ def _run_scan_background(min_return_pct: float, max_hold_days: int) -> None:
 
         universe = _get_scan_universe()
         _scan_state["total"] = len(universe)
-        logger.info("Background swing scan: %d tickers, %.0f%%+ in %dd",
-                     len(universe), min_return_pct, max_hold_days)
+        logger.info("Background swing scan: %d tickers, %.0f%%+ in %dd (workers=%d)",
+                     len(universe), min_return_pct, max_hold_days, _SCAN_WORKERS)
 
         quick_trades: list[dict] = []
         swing_trades: list[dict] = []
+        progress = 0
 
-        for i, ticker in enumerate(universe):
-            _scan_state["progress"] = i + 1
-            result = _analyze_ticker_for_swing(ticker, max_hold_days, min_return_pct)
-            if result is not None:
-                if result["hold_bucket"] == "quick":
-                    quick_trades.append(result)
-                else:
-                    swing_trades.append(result)
+        def _analyze_one(ticker: str) -> dict | None:
+            return _analyze_ticker_for_swing(ticker, max_hold_days, min_return_pct)
 
-        quick_trades.sort(key=lambda x: x["score"], reverse=True)
-        swing_trades.sort(key=lambda x: x["score"], reverse=True)
+        with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as pool:
+            futures = {pool.submit(_analyze_one, t): t for t in universe}
+            for future in futures:
+                progress += 1
+                _scan_state["progress"] = progress
+                try:
+                    result = future.result()
+                except Exception:
+                    continue
+                if result is not None:
+                    if result["hold_bucket"] == "quick":
+                        quick_trades.append(result)
+                    else:
+                        swing_trades.append(result)
 
-        all_picks = quick_trades[:15] + swing_trades[:15]
+        all_candidates = quick_trades + swing_trades
+        all_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+        ranked = _ai_rerank(all_candidates)
+        if ranked is not None:
+            all_candidates = ranked
+            logger.info("AI re-ranked %d swing candidates", len(all_candidates))
+
+        quick_trades = [p for p in all_candidates if p["hold_bucket"] == "quick"][:15]
+        swing_trades = [p for p in all_candidates if p["hold_bucket"] == "swing"][:15]
+
+        all_picks = quick_trades + swing_trades
         _log_swing_picks_to_shadow_book(all_picks)
 
         result_data = {
-            "quick_trades": quick_trades[:15],
-            "swing_trades": swing_trades[:15],
+            "quick_trades": quick_trades,
+            "swing_trades": swing_trades,
             "scan_stats": {
                 "tickers_scanned": len(universe),
                 "timestamp": datetime.utcnow().isoformat(),
@@ -487,10 +597,11 @@ def _run_scan_background(min_return_pct: float, max_hold_days: int) -> None:
             },
         }
         _scan_state["result"] = result_data
+        _scan_state["result_timestamp"] = datetime.utcnow().isoformat()
         _scan_state["status"] = "done"
         data_cache.set("swing:last_result", result_data, ttl_hours=24.0)
         logger.info("Background swing scan done: %d quick + %d swing",
-                     len(quick_trades[:15]), len(swing_trades[:15]))
+                     len(quick_trades), len(swing_trades))
     except Exception as e:
         _scan_state["status"] = "error"
         _scan_state["error"] = str(e)
@@ -530,12 +641,18 @@ async def get_scan_status() -> dict:
             result = cached
             _scan_state["status"] = "done"
             _scan_state["result"] = cached
+            if not _scan_state.get("result_timestamp"):
+                ts = None
+                if isinstance(cached, dict) and isinstance(cached.get("scan_stats"), dict):
+                    ts = cached["scan_stats"].get("timestamp")
+                _scan_state["result_timestamp"] = ts
 
     return {
         "status": _scan_state["status"],
         "progress": _scan_state["progress"],
         "total": _scan_state["total"],
         "result": result,
+        "result_timestamp": _scan_state.get("result_timestamp"),
         "error": _scan_state["error"],
     }
 

@@ -21,8 +21,8 @@ _fetcher = DataFetcher()
 @router.get("/current", response_model=RegimeSnapshot)
 async def get_current_regime() -> RegimeSnapshot:
     """Detect and return the current market regime."""
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
     result = detect_regime(vix_df, spy_df)
 
     indicators = result.get("indicators", {})

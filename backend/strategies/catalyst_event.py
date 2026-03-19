@@ -10,6 +10,7 @@ Each sub-strategy uses adaptive parameters from get_catalyst_params().
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
@@ -52,10 +53,14 @@ class CatalystEventStrategy(BaseStrategy):
             tickers: optional list[str] to scan (defaults to S&P 500)
             regime: current regime string for Kelly computation
             pead_lookback: days back to look for earnings (default 5)
+            progress_cb: optional callback(done, total, step) for progress
+            progress_total: total ticker count for progress reporting
         """
         tickers = kwargs.get("tickers")
         regime = kwargs.get("regime", "bull_trend")
         pead_lookback = kwargs.get("pead_lookback", 5)
+        self._progress_cb = kwargs.get("progress_cb")
+        self._progress_total = kwargs.get("progress_total", 0)
 
         if tickers is None:
             try:
@@ -65,53 +70,168 @@ class CatalystEventStrategy(BaseStrategy):
                 logger.exception("Failed to fetch S&P 500, using empty ticker list")
                 tickers = []
 
+        total = self._progress_total or len(tickers)
+        cb = self._progress_cb
+        params = self.get_params(vol)
+        kelly = compute_adaptive_kelly(
+            strategy="catalyst", vol=vol, regime=regime,
+            trailing_trades=self.trailing_trades,
+        )
+        kelly_frac = kelly["kelly_fraction"] * 0.6
+
         signals: list[TradeSignal] = []
+        seen: set[str] = set()
 
-        # Sub-Strategy A: PEAD
-        pead_signals = scan_universe_for_pead(tickers, vol, lookback_days=pead_lookback)
-        for es in pead_signals:
+        # For small ticker lists (e.g. single-stock analysis), scan them
+        # directly. Only use the AI ticker picker for full scanner scans.
+        if len(tickers) <= 50:
+            scan_tickers = tickers
+        else:
+            if cb:
+                cb(int(total * 0.02), total, "AI selecting the most interesting stocks to scan...")
+
+            from backend.ai.market_ai import ai_pick_scan_tickers
+            from backend.regime.detector import detect_regime
+
+            vix_val = 0.0
+            breadth_val = 0.0
             try:
-                sig = self._pead_to_trade_signal(es, vol, regime)
-                if sig and self.validate_signal(sig):
-                    signals.append(sig)
+                vix_df = data_fetcher.get_daily_ohlcv("^VIX", period="3mo", live=True)
+                spy_df = data_fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
+                if not vix_df.empty:
+                    vix_val = float(vix_df["Close"].iloc[-1])
+                regime_result = detect_regime(vix_df, spy_df)
+                regime_str = regime_result.get("regime", regime)
+                if hasattr(regime_str, "value"):
+                    regime_str = regime_str.value
+                breadth_val = regime_result.get("breadth_pct", 0)
             except Exception:
-                logger.exception("Failed to convert PEAD signal for %s", es.ticker)
+                regime_str = regime
 
-        # Sub-Strategy B: Revision Momentum
-        revision_signals = scan_universe_for_revisions(tickers, vol)
-        for rs in revision_signals:
-            if any(s.ticker == rs.ticker for s in signals):
-                continue
+            ai_picks = ai_pick_scan_tickers(regime_str, tickers, vix=vix_val, breadth_pct=breadth_val)
+
+            if ai_picks:
+                scan_tickers = ai_picks
+            else:
+                step = len(tickers) / 50
+                scan_tickers = [tickers[int(i * step)] for i in range(50)]
+
+        n_scan = len(scan_tickers)
+
+        if cb:
+            cb(int(total * 0.10), total,
+               f"Scanning {n_scan} AI-selected stocks for insider buying and catalysts...")
+
+        done_count = [0]
+
+        def _scan_one(ticker: str) -> list[TradeSignal]:
+            """Check one ticker for all catalyst types: earnings, revisions, insider buying."""
+            results: list[TradeSignal] = []
+
+            # 1) Earnings surprise (PEAD)
             try:
-                sig = self._revision_to_trade_signal(rs, vol, regime)
-                if sig and self.validate_signal(sig):
-                    signals.append(sig)
+                from backend.signals.earnings import detect_pead
+                es = detect_pead(ticker, vol, pead_lookback)
+                if es is not None:
+                    sig = self._pead_to_trade_signal(es, vol, regime)
+                    if sig and self.validate_signal(sig):
+                        results.append(sig)
             except Exception:
-                logger.exception("Failed to convert revision signal for %s", rs.ticker)
+                pass
 
-        # Sub-Strategy C: Institutional Flow (SteadyAPI sweeps)
+            # 2) Analyst revision momentum
+            if not results:
+                try:
+                    from backend.signals.revisions import detect_revision_momentum
+                    rs = detect_revision_momentum(ticker, vol)
+                    if rs is not None:
+                        sig = self._revision_to_trade_signal(rs, vol, regime)
+                        if sig and self.validate_signal(sig):
+                            results.append(sig)
+                except Exception:
+                    pass
+
+            # 3) Insider buying (SEC EDGAR)
+            if not results:
+                try:
+                    score_data = data_fetcher.get_insider_buying_score(ticker)
+                    score = score_data.get("signal_score", 0)
+                    if score >= 30 and score_data.get("buy_count", 0) > 0:
+                        df = data_fetcher.get_daily_ohlcv(ticker, period="3mo")
+                        if not df.empty and len(df) >= 15:
+                            price = float(df["Close"].iloc[-1])
+                            if price > 0:
+                                high = df["High"].tail(14)
+                                low = df["Low"].tail(14)
+                                prev_close = df["Close"].shift(1).tail(14)
+                                tr = pd.concat([
+                                    high - low, (high - prev_close).abs(),
+                                    (low - prev_close).abs()
+                                ], axis=1).max(axis=1)
+                                atr = float(tr.mean())
+                                stop_price = round(price * 0.85, 2)
+                                target_price = round(price * 1.30, 2)
+                                conviction = min(1.0, score / 100)
+                                buy_count = score_data["buy_count"]
+                                buy_val = score_data.get("total_buy_value", 0)
+                                if buy_val >= 1_000_000:
+                                    val_str = f"${buy_val / 1_000_000:.1f}M"
+                                elif buy_val >= 1_000:
+                                    val_str = f"${buy_val / 1_000:.0f}K"
+                                else:
+                                    val_str = f"${buy_val:,.0f}"
+                                edge_parts = [
+                                    f"{buy_count} company insider(s) bought {val_str} worth of stock"
+                                ]
+                                if score_data.get("cluster_buy"):
+                                    edge_parts.append(
+                                        "multiple insiders bought around the same time — "
+                                        "they usually know something the market doesn't"
+                                    )
+                                if score_data.get("c_suite_buying"):
+                                    edge_parts.append(
+                                        "the CEO or CFO is buying — the people running the "
+                                        "company are putting their own money in"
+                                    )
+                                results.append(TradeSignal(
+                                    strategy=StrategyName.CATALYST, ticker=ticker,
+                                    direction="long", conviction=conviction,
+                                    kelly_size_pct=kelly_frac * 100, entry_price=price,
+                                    stop_loss=stop_price,
+                                    target=target_price, max_hold_days=365,
+                                    edge_reason=". ".join(edge_parts) + ".",
+                                    kill_condition=f"Insider sells appear, or if it drops below ${stop_price:.2f} (-15%), re-evaluate",
+                                    expected_sharpe=1.2, signal_score=min(100, score),
+                                ))
+                except Exception:
+                    pass
+
+            done_count[0] += 1
+            if cb:
+                pct = done_count[0] / n_scan
+                cb(int(total * (0.05 + pct * 0.90)), total,
+                   f"Checking stocks... {done_count[0]}/{n_scan}")
+
+            return results
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            for ticker_results in pool.map(_scan_one, scan_tickers):
+                for sig in ticker_results:
+                    if sig.ticker not in seen:
+                        seen.add(sig.ticker)
+                        signals.append(sig)
+
+        # Institutional Flow (single API call, not per-ticker)
         if settings.enable_steadyapi and settings.steadyapi_api_key:
-            flow_signals = self._scan_flow_events(tickers, vol, regime)
-            for sig in flow_signals:
-                if any(s.ticker == sig.ticker for s in signals):
-                    continue
-                if self.validate_signal(sig):
+            for sig in self._scan_flow_events(tickers, vol, regime):
+                if sig.ticker not in seen and self.validate_signal(sig):
+                    seen.add(sig.ticker)
                     signals.append(sig)
-
-        # Sub-Strategy D: Insider Buying (SEC EDGAR Form 4, free)
-        insider_signals = self._scan_insider_buying(tickers[:50], vol, regime)
-        for sig in insider_signals:
-            if any(s.ticker == sig.ticker for s in signals):
-                continue
-            if self.validate_signal(sig):
-                signals.append(sig)
 
         logger.info(
-            "Catalyst strategy generated %d signals (PEAD=%d, Revisions=%d, Insider=%d)",
+            "Catalyst strategy generated %d signals from %d tickers",
             len(signals),
-            len(pead_signals),
-            len(revision_signals),
-            len(insider_signals),
+            n_scan,
         )
         return signals
 
@@ -317,82 +437,7 @@ class CatalystEventStrategy(BaseStrategy):
 
         return signals
 
-    def _scan_insider_buying(
-        self,
-        tickers: list[str],
-        vol: VolContext,
-        regime: str,
-    ) -> list[TradeSignal]:
-        """Sub-Strategy D: insider buying signal from SEC EDGAR Form 4.
-
-        CEO/CFO/director buying own stock is a strong conviction signal.
-        Cluster buys (2+ insiders in 30 days) are even stronger.
-        Hold 5-20 days.
-        """
-        signals: list[TradeSignal] = []
-        params = self.get_params(vol)
-
-        for ticker in tickers:
-            try:
-                score_data = data_fetcher.get_insider_buying_score(ticker)
-                score = score_data.get("signal_score", 0)
-
-                if score < 30:
-                    continue
-
-                if score_data.get("buy_count", 0) == 0:
-                    continue
-
-                price = data_fetcher.get_current_price(ticker)
-                if price is None or price <= 0:
-                    continue
-
-                direction = "long"
-                atr = self._get_atr(ticker)
-                stop_info = compute_stop(price, direction, atr, "catalyst", vol)
-
-                target_mult = 1 + params["target_return_pct"] / 100 * 0.8
-                target = price * target_mult
-
-                kelly = compute_adaptive_kelly(
-                    strategy="catalyst", vol=vol, regime=regime,
-                    trailing_trades=self.trailing_trades,
-                )
-                # Insider signals get conservative sizing
-                kelly_frac = kelly["kelly_fraction"] * 0.6
-                conviction = min(1.0, score / 100)
-
-                edge_parts = [
-                    f"Insider buying: {score_data['buy_count']} buy(s), "
-                    f"${score_data.get('total_buy_value', 0):,.0f} total value"
-                ]
-                if score_data.get("cluster_buy"):
-                    edge_parts.append("cluster buy (2+ insiders in 30d)")
-                if score_data.get("c_suite_buying"):
-                    edge_parts.append("C-suite buying (CEO/CFO)")
-
-                signals.append(TradeSignal(
-                    strategy=StrategyName.CATALYST,
-                    ticker=ticker,
-                    direction=direction,
-                    conviction=conviction,
-                    kelly_size_pct=kelly_frac * 100,
-                    entry_price=price,
-                    stop_loss=stop_info["stop_price"],
-                    target=round(target, 2),
-                    max_hold_days=20,
-                    edge_reason=". ".join(edge_parts) + ". Insiders have non-public conviction.",
-                    kill_condition=(
-                        f"Insider sells appear, or stop at {stop_info['stop_price']:.2f}, "
-                        f"or 20d time stop"
-                    ),
-                    expected_sharpe=1.2,
-                    signal_score=min(100, score),
-                ))
-            except Exception:
-                logger.debug("Insider scan failed for %s", ticker)
-
-        return signals
+    
 
     @staticmethod
     def _get_atr(ticker: str, period: int = 14) -> float:

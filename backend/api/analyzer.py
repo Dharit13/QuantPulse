@@ -12,7 +12,6 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.adaptive.vol_context import compute_vol_context
 from backend.data.fetcher import DataFetcher
-from backend.data.sources.yfinance_src import yfinance_source
 from backend.models.schemas import Regime, StockAnalysis, TradeSignal
 from backend.regime.detector import detect_regime
 from backend.strategies.catalyst_event import CatalystEventStrategy
@@ -119,8 +118,26 @@ def _compute_technicals(df: pd.DataFrame) -> dict:
     }
 
 
-def _build_system_take(technicals: dict, fundamentals: dict, regime: str) -> dict:
-    """Generate an opinionated system assessment."""
+def _build_system_take(
+    technicals: dict,
+    fundamentals: dict,
+    regime: str,
+    ticker: str = "",
+    signals: list | None = None,
+) -> dict:
+    """Generate an opinionated system assessment.
+
+    Tries AI-powered analysis first (Anthropic Claude). Falls back to
+    rule-based logic if the API key is missing or the call fails.
+    """
+    from backend.ai.analyst import ai_system_take
+    ai_result = ai_system_take(
+        ticker, technicals, fundamentals, regime,
+        [s.model_dump() if hasattr(s, "model_dump") else s for s in (signals or [])],
+    )
+    if ai_result is not None:
+        return ai_result
+
     notes: list[str] = []
     bias = "neutral"
     score = 50
@@ -447,15 +464,13 @@ def _build_trade_plan(
     if price <= 0 or atr <= 0:
         return {"action": "INSUFFICIENT DATA", "reason": "Cannot compute plan without price/ATR data"}
 
-    # ── Decision: BUY / WAIT / AVOID
-    sma_200_check = technicals.get("sma_200") or price
-    if price < sma_200_check:
-        action = "AVOID"
-    elif score >= 65 and bias in ("bullish", "lean bullish", "cautiously bullish"):
+    # ── Decision: driven by AI bias, not hardcoded score thresholds.
+    # AI already considered technicals, fundamentals, regime, and signals.
+    if bias in ("bullish", "lean bullish"):
         action = "BUY"
-    elif score >= 55 and "bearish" not in bias:
+    elif bias == "cautiously bullish":
         action = "WAIT FOR BETTER ENTRY"
-    elif score >= 45:
+    elif bias == "neutral":
         action = "HOLD OFF — NO EDGE"
     else:
         action = "AVOID"
@@ -529,21 +544,28 @@ def _build_trade_plan(
             else:
                 time_to_50pct = f"~{months:.0f} months — unlikely from this stock alone, consider options or higher-beta alternatives"
 
-    # ── Position sizing for given capital
+    # ── Position sizing: buy as many shares as the budget allows
+    sizing_note = ""
     if entry > 0 and stop > 0:
         risk_per_share = entry - stop
-        risk_budget = capital * 0.02  # risk 2% of capital per trade
-        shares = max(1, int(risk_budget / risk_per_share))
-        position_value = round(shares * entry, 2)
-        position_pct = round(position_value / capital * 100, 1)
-        # Cap at 20% of capital
-        if position_pct > 20:
-            shares = max(1, int(capital * 0.20 / entry))
-            position_value = round(shares * entry, 2)
-            position_pct = round(position_value / capital * 100, 1)
-        max_loss = round(shares * risk_per_share, 2)
-        gain_t1 = round(shares * (target_1 - entry), 2)
-        gain_t2 = round(shares * (target_2 - entry), 2)
+
+        if entry > capital:
+            shares = 0
+            sizing_note = (
+                f"1 share costs ${entry:,.0f} which exceeds your ${capital:,.0f} budget. "
+                f"Consider fractional shares, a lower-priced stock, or increasing your budget."
+            )
+        else:
+            shares = int(capital / entry)
+            if shares < 1:
+                shares = 0
+                sizing_note = f"Budget too small for even 1 share at ${entry:,.2f}."
+
+        position_value = round(shares * entry, 2) if shares > 0 else 0
+        position_pct = round(position_value / capital * 100, 1) if shares > 0 else 0
+        max_loss = round(shares * risk_per_share, 2) if shares > 0 else 0
+        gain_t1 = round(shares * (target_1 - entry), 2) if shares > 0 else 0
+        gain_t2 = round(shares * (target_2 - entry), 2) if shares > 0 else 0
     else:
         shares = 0
         position_value = 0
@@ -551,6 +573,7 @@ def _build_trade_plan(
         max_loss = 0
         gain_t1 = 0
         gain_t2 = 0
+        sizing_note = ""
 
     # ── Sell window first — it can override the own-it recommendation
     sma_200 = technicals.get("sma_200") or price
@@ -708,6 +731,7 @@ def _build_trade_plan(
             "max_loss": max_loss,
             "gain_at_target_1": gain_t1,
             "gain_at_target_2": gain_t2,
+            "note": sizing_note,
         },
         "if_you_own_it": {
             "action": own_action,
@@ -724,7 +748,7 @@ def _build_trade_plan(
 
 def _analyze_sync(ticker: str, capital: float) -> dict:
     """Full analysis — runs in thread pool."""
-    ohlcv = _fetcher.get_daily_ohlcv(ticker, period="2y")
+    ohlcv = _fetcher.get_daily_ohlcv(ticker, period="2y", live=True)
     if ohlcv.empty:
         raise ValueError(f"No data for {ticker}")
 
@@ -736,10 +760,9 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
     vol = compute_vol_context(spy_df, vix_df)
 
     technicals = _compute_technicals(ohlcv)
-    fundamentals = yfinance_source.get_fundamentals(ticker)
-    system_take = _build_system_take(technicals, fundamentals or {}, regime.value)
+    fundamentals = _fetcher.get_fundamentals(ticker)
 
-    # Generate strategy signals first so the trade plan can factor them in
+    # Generate strategy signals before system take so AI can reason over them
     signals: list[TradeSignal] = []
     try:
         catalyst = CatalystEventStrategy()
@@ -753,6 +776,11 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
         signals.extend(s for s in cross_signals if s.ticker.upper() == ticker.upper())
     except Exception as e:
         logger.debug("CrossAsset skipped for %s: %s", ticker, e)
+
+    system_take = _build_system_take(
+        technicals, fundamentals or {}, regime.value,
+        ticker=ticker, signals=signals,
+    )
 
     trade_plan = _build_trade_plan(
         ticker, technicals, fundamentals or {}, system_take, regime.value, capital,
@@ -779,6 +807,9 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
                 ),
             }
 
+    from backend.signals.dcf import compute_dcf
+    dcf = compute_dcf(ticker, _fetcher)
+
     return {
         "ticker": ticker,
         "current_price": technicals["current_price"],
@@ -787,6 +818,7 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
         "signals": [s.model_dump() for s in signals],
         "technicals": technicals,
         "fundamentals": fundamentals or {},
+        "dcf_valuation": dcf,
         "system_take": system_take,
         "trade_plan": trade_plan,
     }
@@ -795,38 +827,65 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
 def _resolve_ticker(raw: str) -> str:
     """Resolve a company name or ticker to a valid ticker symbol.
 
-    1. If it looks like a ticker already (short, uppercase), use it directly.
-    2. Search the S&P 500 universe (already cached) by company name.
-    3. Fall back to yfinance search API.
+    1. Exact ticker match in S&P 500 universe.
+    2. Company name / sub-industry search in S&P 500 (case-insensitive,
+       also checks if the input is a well-known brand name that differs
+       from the official company name, e.g. "Google" → Alphabet).
+    3. yfinance search API — picks the best match, preferring S&P 500
+       tickers when multiple results exist.
+    4. Raw input uppercased as last resort.
     """
     cleaned = raw.strip()
+    upper = cleaned.upper()
 
-    if len(cleaned) <= 5 and cleaned == cleaned.upper() and cleaned.isalpha():
-        return cleaned
-
-    cleaned = cleaned.upper()
-
-    # Search universe by name
     try:
         from backend.data.universe import fetch_sp500_constituents
         df = fetch_sp500_constituents()
-        if not df.empty and "name" in df.columns:
-            match = df[df["name"].str.upper().str.contains(cleaned, na=False)]
-            if not match.empty:
-                return match.iloc[0]["ticker"]
-    except Exception:
-        pass
+        if not df.empty:
+            sp500_tickers = set(df["ticker"].str.upper())
 
-    # Fall back to yfinance search
+            exact = df[df["ticker"].str.upper() == upper]
+            if not exact.empty:
+                return exact.iloc[0]["ticker"]
+
+            if "name" in df.columns:
+                name_match = df[df["name"].str.upper().str.contains(upper, na=False)]
+                if not name_match.empty:
+                    return name_match.iloc[0]["ticker"]
+    except Exception:
+        sp500_tickers = set()
+
     try:
         import yfinance as yf
         results = yf.Search(cleaned).quotes
         if results:
-            return results[0].get("symbol", cleaned)
+            first_sym = results[0].get("symbol", upper)
+
+            # If the first result is in S&P 500 but there's also a Class A
+            # variant, prefer Class A (e.g. GOOGL over GOOG).
+            if first_sym.upper() in sp500_tickers:
+                try:
+                    name_of_match = df[df["ticker"].str.upper() == first_sym.upper()]["name"].iloc[0]
+                    base_name = name_of_match.split("(")[0].strip()
+                    same_company = df[df["name"].str.contains(base_name, na=False)]
+                    class_a = same_company[same_company["name"].str.contains("Class A", na=False)]
+                    if not class_a.empty:
+                        return class_a.iloc[0]["ticker"]
+                except Exception:
+                    pass
+                return first_sym
+
+            # Check if any result is in S&P 500
+            for r in results[:5]:
+                sym = r.get("symbol", "")
+                if sym.upper() in sp500_tickers:
+                    return sym
+
+            return first_sym
     except Exception:
         pass
 
-    return cleaned
+    return upper
 
 
 @router.get("/{ticker}")

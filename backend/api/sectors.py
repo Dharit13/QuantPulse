@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from backend.adaptive.vol_context import compute_vol_context
 from backend.data.cross_asset import SECTOR_ETFS
@@ -23,11 +24,15 @@ _executor = ThreadPoolExecutor(max_workers=2)
 
 TOP_PICKS_PER_SECTOR = 3
 
+_CACHE_TTL_SECONDS = 15 * 60  # 15 minutes
+_cached_result: dict | None = None
+_cached_at: float = 0
+
 
 def _analyze_sectors() -> dict:
     """Analyze all sectors and generate 30-day recommendations."""
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
     regime_result = detect_regime(vix_df, spy_df)
     regime = regime_result["regime"].value
     vol = compute_vol_context(spy_df, vix_df)
@@ -36,7 +41,7 @@ def _analyze_sectors() -> dict:
 
     for name, etf in SECTOR_ETFS.items():
         try:
-            df = _fetcher.get_daily_ohlcv(etf, period="6mo")
+            df = _fetcher.get_daily_ohlcv(etf, period="6mo", live=True)
             if df.empty or len(df) < 60:
                 continue
 
@@ -148,8 +153,78 @@ def _analyze_sectors() -> dict:
     }
 
 
+def _score_one_stock(ticker: str, sector_display: str, name: str) -> dict | None:
+    """Score a single stock for sector-based picking. Returns dict or None."""
+    try:
+        df = _fetcher.get_daily_ohlcv(ticker, period="3mo", live=True)
+        if df.empty or len(df) < 20:
+            return None
+
+        close = df["Close"]
+        price = float(close.iloc[-1])
+        ret_20d = float((close.iloc[-1] / close.iloc[-20] - 1) * 100)
+
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0).tail(14).mean()
+        loss = (-delta.where(delta < 0, 0)).tail(14).mean()
+        rs = gain / loss if loss > 0 else 100
+        rsi = float(100 - (100 / (1 + rs)))
+
+        sma_50 = float(close.tail(50).mean()) if len(close) >= 50 else price
+        sma_200 = float(close.tail(200).mean()) if len(close) >= 200 else price
+
+        high = df["High"]
+        low = df["Low"]
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        atr = float(tr.tail(14).mean())
+
+        entry = round(min(price, sma_50 * 0.99) if price > sma_50 else price, 2)
+        stop_loss = round(entry - atr * 2, 2)
+        target_30 = round(entry * 1.30, 2)
+
+        stock_score = 50.0
+        if rsi < 35:
+            stock_score += 20
+        elif rsi < 45:
+            stock_score += 10
+        elif rsi > 75:
+            stock_score -= 15
+
+        if price > sma_50:
+            stock_score += 10
+
+        if -8 < ret_20d < -2:
+            stock_score += 10
+
+        stock_score = max(0, min(100, stock_score))
+
+        return {
+            "ticker": ticker,
+            "name": name,
+            "sector": sector_display,
+            "price": round(price, 2),
+            "entry": entry,
+            "stop_loss": stop_loss,
+            "target": target_30,
+            "analyst_target": None,
+            "atr": round(atr, 2),
+            "sma_200": round(sma_200, 2),
+            "return_20d": round(ret_20d, 1),
+            "rsi": round(rsi, 1),
+            "score": round(stock_score),
+            "why": _stock_reason(rsi, ret_20d, price, sma_50),
+        }
+    except Exception:
+        return None
+
+
 def _pick_stocks_from_sectors(top_sectors: list[dict]) -> list[dict]:
-    """Pick the best stocks from the favored sectors."""
+    """Pick the best stocks from the favored sectors using parallel analysis."""
     picks: list[dict] = []
 
     try:
@@ -174,6 +249,8 @@ def _pick_stocks_from_sectors(top_sectors: list[dict]) -> list[dict]:
         "Communication": "Communication Services",
     }
 
+    # Build a flat list of (ticker, sector, name) tuples across all sectors
+    tasks: list[tuple[str, str, str]] = []
     for sector_info in top_sectors:
         sector_display = sector_info["sector"]
         gics_sector = sector_name_map.get(sector_display, sector_display)
@@ -182,60 +259,63 @@ def _pick_stocks_from_sectors(top_sectors: list[dict]) -> list[dict]:
         if sector_stocks.empty:
             continue
 
-        tickers = sector_stocks["ticker"].tolist()[:25]
-        scored_stocks: list[dict] = []
-
+        tickers = sector_stocks["ticker"].tolist()[:12]
         for ticker in tickers:
-            try:
-                df = _fetcher.get_daily_ohlcv(ticker, period="3mo")
-                if df.empty or len(df) < 20:
-                    continue
+            name = (
+                sector_stocks[sector_stocks["ticker"] == ticker]["name"].iloc[0]
+                if "name" in sector_stocks.columns else ticker
+            )
+            tasks.append((ticker, sector_display, name))
 
-                close = df["Close"]
-                price = float(close.iloc[-1])
-                ret_20d = float((close.iloc[-1] / close.iloc[-20] - 1) * 100)
+    # Score all tickers in parallel
+    with ThreadPoolExecutor(max_workers=15) as pool:
+        results = pool.map(lambda t: _score_one_stock(*t), tasks)
 
-                delta = close.diff()
-                gain = delta.where(delta > 0, 0).tail(14).mean()
-                loss = (-delta.where(delta < 0, 0)).tail(14).mean()
-                rs = gain / loss if loss > 0 else 100
-                rsi = float(100 - (100 / (1 + rs)))
+    # Collect all scored candidates
+    all_scored: list[dict] = [r for r in results if r is not None]
+    all_scored.sort(key=lambda s: s["score"], reverse=True)
 
-                sma_50 = float(close.tail(50).mean()) if len(close) >= 50 else price
+    if not all_scored:
+        return picks
 
-                stock_score = 50.0
-                if rsi < 35:
-                    stock_score += 20
-                elif rsi < 45:
-                    stock_score += 10
-                elif rsi > 75:
-                    stock_score -= 15
+    # Ask AI to pick the best 5 from all candidates
+    try:
+        from backend.ai.market_ai import ai_pick_dashboard_stocks
+        from backend.regime.detector import detect_regime as _detect
 
-                if price > sma_50:
-                    stock_score += 10
+        vix_df = _fetcher.get_daily_ohlcv("^VIX", period="3mo", live=True)
+        spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
+        regime_result = _detect(vix_df, spy_df)
+        regime_str = regime_result.get("regime", "unknown")
+        if hasattr(regime_str, "value"):
+            regime_str = regime_str.value
 
-                if -8 < ret_20d < -2:
-                    stock_score += 10  # pullback in otherwise good sector
+        ai_result = ai_pick_dashboard_stocks(regime_str, all_scored)
+        if ai_result:
+            ai_tickers, ai_reasons = ai_result
+            ticker_map = {s["ticker"]: s for s in all_scored}
+            for ticker in ai_tickers:
+                if ticker in ticker_map:
+                    pick = ticker_map[ticker]
+                    if ai_reasons.get(ticker):
+                        pick["why"] = ai_reasons[ticker]
+                    picks.append(pick)
+            if picks:
+                logger.info("AI picked %d dashboard stocks", len(picks))
+                return picks
+    except Exception as e:
+        logger.warning("AI stock picker failed, falling back to score-based: %s", e)
 
-                stock_score = max(0, min(100, stock_score))
+    # Fallback: top 3 per sector by score
+    sector_buckets: dict[str, list[dict]] = {}
+    for s in all_scored:
+        sector = s["sector"]
+        if sector not in sector_buckets:
+            sector_buckets[sector] = []
+        sector_buckets[sector].append(s)
 
-                name = sector_stocks[sector_stocks["ticker"] == ticker]["name"].iloc[0] if "name" in sector_stocks.columns else ticker
-
-                scored_stocks.append({
-                    "ticker": ticker,
-                    "name": name,
-                    "sector": sector_display,
-                    "price": round(price, 2),
-                    "return_20d": round(ret_20d, 1),
-                    "rsi": round(rsi, 1),
-                    "score": round(stock_score),
-                    "why": _stock_reason(rsi, ret_20d, price, sma_50),
-                })
-            except Exception:
-                continue
-
-        scored_stocks.sort(key=lambda s: s["score"], reverse=True)
-        picks.extend(scored_stocks[:TOP_PICKS_PER_SECTOR])
+    for sector_list in sector_buckets.values():
+        picks.extend(sector_list[:TOP_PICKS_PER_SECTOR])
 
     picks.sort(key=lambda s: s["score"], reverse=True)
     return picks
@@ -258,7 +338,19 @@ def _stock_reason(rsi: float, ret_20d: float, price: float, sma_50: float) -> st
 
 
 @router.get("/recommendations")
-async def get_sector_recommendations() -> dict:
+async def get_sector_recommendations(
+    refresh: bool = Query(False, description="Force fresh analysis, bypass cache"),
+) -> dict:
     """30-day sector and stock recommendations based on current market regime."""
+    global _cached_result, _cached_at
+
+    if not refresh and _cached_result and (time.time() - _cached_at) < _CACHE_TTL_SECONDS:
+        age_min = (time.time() - _cached_at) / 60
+        logger.info("Returning cached recommendations (%.0f min old)", age_min)
+        return {**_cached_result, "cached": True, "cache_age_minutes": round(age_min, 1)}
+
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_executor, _analyze_sectors)
+    result = await loop.run_in_executor(_executor, _analyze_sectors)
+    _cached_result = result
+    _cached_at = time.time()
+    return {**result, "cached": False, "cache_age_minutes": 0}

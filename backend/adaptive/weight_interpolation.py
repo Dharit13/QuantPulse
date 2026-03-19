@@ -8,10 +8,10 @@ from backend.adaptive.vol_context import VolContext
 
 STRATEGY_WEIGHTS = {
     "bull_trend":     {"stat_arb": 0.15, "catalyst": 0.25, "momentum": 0.35, "flow": 0.10, "intraday": 0.10, "cash": 0.05},
-    "bull_choppy":    {"stat_arb": 0.30, "catalyst": 0.20, "momentum": 0.10, "flow": 0.15, "intraday": 0.20, "cash": 0.05},
-    "bear_trend":     {"stat_arb": 0.20, "catalyst": 0.15, "momentum": 0.25, "flow": 0.10, "intraday": 0.10, "cash": 0.20},
-    "crisis":         {"stat_arb": 0.10, "catalyst": 0.05, "momentum": 0.05, "flow": 0.05, "intraday": 0.05, "cash": 0.70},
-    "mean_reverting": {"stat_arb": 0.35, "catalyst": 0.15, "momentum": 0.05, "flow": 0.15, "intraday": 0.25, "cash": 0.05},
+    "bull_choppy":    {"stat_arb": 0.25, "catalyst": 0.20, "momentum": 0.10, "flow": 0.10, "intraday": 0.15, "cash": 0.20},
+    "bear_trend":     {"stat_arb": 0.10, "catalyst": 0.15, "momentum": 0.10, "flow": 0.05, "intraday": 0.05, "cash": 0.55},
+    "crisis":         {"stat_arb": 0.05, "catalyst": 0.05, "momentum": 0.00, "flow": 0.00, "intraday": 0.00, "cash": 0.90},
+    "mean_reverting": {"stat_arb": 0.35, "catalyst": 0.15, "momentum": 0.05, "flow": 0.15, "intraday": 0.20, "cash": 0.10},
 }
 
 

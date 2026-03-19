@@ -42,13 +42,13 @@ _fetcher = DataFetcher()
 _executor = ThreadPoolExecutor(max_workers=2)
 _auditor = SignalAuditor()
 
-def _get_scan_universe(max_tickers: int = 100) -> list[str]:
-    """Build scan universe dynamically from S&P 500 constituents."""
+def _get_scan_universe() -> list[str]:
+    """Build scan universe dynamically from full S&P 500 constituents."""
     try:
         from backend.data.universe import fetch_sp500_constituents
         sp500 = fetch_sp500_constituents()
         if not sp500.empty:
-            return sp500["ticker"].tolist()[:max_tickers]
+            return sp500["ticker"].tolist()
     except Exception:
         logger.warning("Failed to fetch dynamic universe, using fallback")
 
@@ -202,32 +202,45 @@ def _log_signals_to_shadow_book(
 # ── Strategy scan ────────────────────────────────────────────
 
 
-def _run_scan(vol: VolContext, regime: Regime) -> list[TradeSignal]:
-    """Execute all strategy scans synchronously (runs in thread pool)."""
-    all_signals: list[TradeSignal] = []
+def _run_scan(
+    vol: VolContext,
+    regime: Regime,
+    progress_cb: callable | None = None,
+) -> list[TradeSignal]:
+    """Execute all strategy scans. Catalyst strategy (the heaviest) gets the
+    progress callback and handles its own internal parallelism for insider
+    buying. Other strategies run after it completes.
+    """
     tickers = _get_scan_universe()
+    total_tickers = len(tickers)
+    all_signals: list[TradeSignal] = []
 
     if settings.enable_catalyst:
         try:
             from backend.strategies.catalyst_event import CatalystEventStrategy
-            catalyst = CatalystEventStrategy()
-            all_signals.extend(catalyst.generate_signals(vol, tickers=tickers, regime=regime.value))
+            strat = CatalystEventStrategy()
+            all_signals.extend(strat.generate_signals(
+                vol, tickers=tickers, regime=regime.value,
+                progress_cb=progress_cb, progress_total=total_tickers,
+            ))
         except Exception as e:
             logger.warning("Catalyst scan error: %s", e)
 
     if settings.enable_cross_asset:
         try:
             from backend.strategies.cross_asset_momentum import CrossAssetMomentumStrategy
-            cross = CrossAssetMomentumStrategy()
-            all_signals.extend(cross.generate_signals(vol, tickers=tickers, regime=regime.value))
+            all_signals.extend(CrossAssetMomentumStrategy().generate_signals(
+                vol, tickers=tickers, regime=regime.value,
+            ))
         except Exception as e:
             logger.warning("CrossAsset scan error: %s", e)
 
     if settings.enable_gap_reversion:
         try:
             from backend.strategies.gap_reversion import GapReversionStrategy
-            gap = GapReversionStrategy()
-            all_signals.extend(gap.generate_signals(vol, tickers=tickers, regime=regime.value))
+            all_signals.extend(GapReversionStrategy().generate_signals(
+                vol, tickers=tickers, regime=regime.value,
+            ))
         except Exception as e:
             logger.warning("GapReversion scan error: %s", e)
 
@@ -243,8 +256,8 @@ async def scan_universe(
     min_score: float = Query(default=60.0, ge=0, le=100),
 ) -> ScannerResult:
     """Synchronous scan (blocks until done). Use /start-scan + /status for async."""
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
     regime_result = detect_regime(vix_df, spy_df)
     regime: Regime = regime_result["regime"]
     vol = compute_vol_context(spy_df, vix_df)
@@ -271,7 +284,9 @@ _scanner_state: dict = {
     "status": "idle",
     "progress": 0,
     "total": 0,
+    "universe_size": 0,
     "result": None,
+    "result_timestamp": None,
     "error": None,
 }
 
@@ -283,27 +298,39 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
         _scanner_state["status"] = "scanning"
         _scanner_state["error"] = None
         _scanner_state["progress"] = 0
-        _scanner_state["total"] = 4
+        _scanner_state["total"] = 100
+        _scanner_state["step"] = "Detecting market regime..."
 
-        vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-        spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+        universe = _get_scan_universe()
+        _scanner_state["universe_size"] = len(universe)
+        _scanner_state["total"] = len(universe)
+
+        vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+        spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
         regime_result = detect_regime(vix_df, spy_df)
         regime: Regime = regime_result["regime"]
         vol = compute_vol_context(spy_df, vix_df)
-        _scanner_state["progress"] = 1
 
-        all_signals = _run_scan(vol, regime)
-        _scanner_state["progress"] = 2
+        def _on_progress(done: int, total: int, step: str = "") -> None:
+            _scanner_state["progress"] = done
+            _scanner_state["total"] = total
+            if step:
+                _scanner_state["step"] = step
 
+        _on_progress(5, len(universe), "Scanning stocks for signals...")
+
+        all_signals = _run_scan(vol, regime, progress_cb=_on_progress)
+
+        _on_progress(len(universe) - 10, len(universe), "Enriching and ranking signals...")
         _log_signals_to_shadow_book(all_signals, regime, vol)
 
         enriched = _enrich_signals(all_signals, vol, regime)
-        _scanner_state["progress"] = 3
 
         filtered = [e for e in enriched if e.signal.signal_score >= min_score]
         filtered.sort(key=lambda e: e.signal.conviction, reverse=True)
         filtered = filtered[:max_signals]
-        _scanner_state["progress"] = 4
+
+        _on_progress(len(universe), len(universe), "Done")
 
         result = ScannerResult(
             timestamp=datetime.utcnow(),
@@ -313,6 +340,7 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
         )
         result_dict = result.model_dump(mode="json")
         _scanner_state["result"] = result_dict
+        _scanner_state["result_timestamp"] = datetime.utcnow().isoformat()
         _scanner_state["status"] = "done"
         data_cache.set("scanner:last_result", result_dict, ttl_hours=24.0)
         logger.info("Background scan done: %d signals (of %d total)", len(filtered), len(all_signals))
@@ -355,11 +383,18 @@ async def get_scanner_status() -> dict:
             result = cached
             _scanner_state["status"] = "done"
             _scanner_state["result"] = cached
+            if not _scanner_state.get("result_timestamp"):
+                _scanner_state["result_timestamp"] = (
+                    cached.get("timestamp") if isinstance(cached, dict) else None
+                )
 
     return {
         "status": _scanner_state["status"],
         "progress": _scanner_state["progress"],
         "total": _scanner_state["total"],
+        "step": _scanner_state.get("step", ""),
+        "universe_size": _scanner_state.get("universe_size", 0),
         "result": result,
+        "result_timestamp": _scanner_state.get("result_timestamp"),
         "error": _scanner_state["error"],
     }

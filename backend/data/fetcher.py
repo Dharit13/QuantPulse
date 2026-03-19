@@ -16,11 +16,15 @@ class DataFetcher:
     All methods cache results to reduce API calls.
     """
 
-    def get_daily_ohlcv(self, ticker: str, period: str = "2y") -> pd.DataFrame:
+    def get_daily_ohlcv(
+        self, ticker: str, period: str = "2y", live: bool = False,
+    ) -> pd.DataFrame:
         cache_key = f"ohlcv:{ticker}:{period}"
-        cached = data_cache.get(cache_key)
-        if cached is not None and isinstance(cached, pd.DataFrame) and not cached.empty:
-            return cached
+
+        if not live:
+            cached = data_cache.get(cache_key)
+            if cached is not None and isinstance(cached, pd.DataFrame) and not cached.empty:
+                return cached
 
         df = pd.DataFrame()
 
@@ -65,6 +69,18 @@ class DataFetcher:
         if data:
             data_cache.set(cache_key, data, ttl_hours=24.0)
         return data
+
+    def get_cashflow(self, ticker: str) -> pd.DataFrame:
+        """Annual cash flow statement. FMP if available, else yfinance.
+
+        Not DB-cached because the DataFrame has complex index labels that
+        don't survive JSON round-tripping. Called once per analysis anyway.
+        """
+        return yfinance_source.get_cashflow(ticker)
+
+    def get_shares_outstanding(self, ticker: str) -> int | None:
+        """Shares outstanding for per-share calculations."""
+        return yfinance_source.get_shares_outstanding(ticker)
 
     def get_earnings_data(self, ticker: str) -> list[dict]:
         cache_key = f"earnings:{ticker}"

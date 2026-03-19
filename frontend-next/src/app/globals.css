@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #f5f5f0;
+  --color-foreground: #0a0b09;
+
+  --color-card: #ffffff;
+  --color-card-hover: #fafaf8;
+  --color-card-alt: #f9f9f6;
+  --color-border: #e8e8e3;
+  --color-border-hover: #d5d5ce;
+
+  --color-text-primary: #0a0b09;
+  --color-text-secondary: #52524c;
+  --color-text-muted: #85857e;
+  --color-text-body: #3d3d38;
+  --color-text-bright: #2d2d28;
+
+  --color-accent: #539616;
+  --color-accent-light: #6db52a;
+  --color-accent-bg: rgba(83, 150, 22, 0.08);
+  --color-accent-bg-strong: rgba(83, 150, 22, 0.14);
+
+  --color-gold: #c6a339;
+  --color-gold-light: #d8d1af;
+  --color-gold-bg: rgba(198, 163, 57, 0.1);
+
+  --color-olive: #565845;
+  --color-olive-bg: rgba(86, 88, 69, 0.08);
+
+  --color-qp-green: #2d9d3a;
+  --color-qp-red: #d44040;
+  --color-qp-amber: #c68a1a;
+  --color-qp-blue: #3b7dd8;
+  --color-qp-purple: #6c5ce7;
+
+  --color-qp-green-bg: rgba(45, 157, 58, 0.08);
+  --color-qp-green-bg-subtle: rgba(45, 157, 58, 0.04);
+  --color-qp-red-bg: rgba(212, 64, 64, 0.08);
+  --color-qp-red-bg-subtle: rgba(212, 64, 64, 0.04);
+  --color-qp-amber-bg: rgba(198, 138, 26, 0.08);
+  --color-qp-amber-bg-subtle: rgba(198, 138, 26, 0.04);
+  --color-qp-blue-bg: rgba(59, 125, 216, 0.08);
+  --color-qp-blue-bg-subtle: rgba(59, 125, 216, 0.04);
+  --color-qp-purple-bg: rgba(108, 92, 231, 0.08);
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.03);
+  --shadow-sidebar: 2px 0 12px rgba(0, 0, 0, 0.04);
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+}
+
+/* QuantPulse loading animation */
+@keyframes qp-pulse {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes qp-pulse-ring {
+  0% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+@keyframes qp-bar-pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-qp-pulse {
+  animation: qp-pulse 1.6s ease-in-out infinite;
+}
+
+.animate-qp-ring {
+  animation: qp-pulse-ring 1.6s ease-out infinite;
+}
+
+.animate-qp-bar {
+  animation: qp-bar-pulse 1.6s ease-in-out infinite;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d5d5ce;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b5b5ae;
+}
