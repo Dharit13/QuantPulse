@@ -1,14 +1,10 @@
-"""SteadyAPI data source — institutional options flow and unusual activity.
+"""SteadyAPI data source — stock market data and options flow.
 
-SteadyAPI ($15/mo Starter) provides:
-  - Options flow: large institutional sweeps, blocks, whale trades
-  - Unusual options activity: contracts with volume >> open interest
+SteadyAPI Starter ($15/mo) provides:
+  - Stock Market API: institutional holdings, short interest, analyst ratings
+  - Options Data API (requires upgrade): options flow, unusual activity
 
 Enable by setting STEADYAPI_API_KEY in .env.
-
-Feeds into:
-  - Catalyst Sub-C (institutional flow signal)
-  - Flow Imbalance strategy (unusual volume detection)
 """
 
 import logging
@@ -22,7 +18,7 @@ from backend.data.rate_limiter import rate_limiter
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://api.steadyapi.com/v1/markets/options"
+BASE_URL = "https://api.steadyapi.com"
 
 # SteadyAPI trade conditions that indicate institutional activity
 SWEEP_CONDITIONS = {"SLCN", "SLFT", "SLMN", "MLCN", "MLFT", "MLMN"}
@@ -128,11 +124,10 @@ def _normalize_unusual_record(raw: dict) -> dict:
 
 
 class SteadyAPISource:
-    """SteadyAPI options data source for institutional flow signals.
+    """SteadyAPI data source for stock market and options data.
 
-    Exposes two main data feeds:
-      1. Options flow — large individual trades (sweeps, blocks)
-      2. Unusual activity — contracts with volume >> open interest
+    Stock Market API (Starter plan): institutional holdings, short interest
+    Options Data API (upgrade required): options flow, unusual activity
     """
 
     SOURCE_NAME = "steadyapi"
@@ -150,6 +145,9 @@ class SteadyAPISource:
                 timeout=15.0,
             )
         return self._client
+
+    def _has_api_key(self) -> bool:
+        return bool(self._api_key)
 
     def _enabled(self) -> bool:
         return bool(self._api_key) and settings.enable_steadyapi
@@ -191,7 +189,7 @@ class SteadyAPISource:
         all_records: list[dict] = []
         try:
             for page in range(1, max_pages + 1):
-                data = self._get("/options-flow", params={"type": asset_class, "page": str(page)})
+                data = self._get("/v1/markets/options/options-flow", params={"type": asset_class, "page": str(page)})
                 body = data.get("body", [])
                 if not body:
                     break
@@ -238,7 +236,7 @@ class SteadyAPISource:
         try:
             for page in range(1, max_pages + 1):
                 data = self._get(
-                    "/unusual-options-activity",
+                    "/v1/markets/options/unusual-options-activity",
                     params={"type": asset_class, "page": str(page)},
                 )
                 body = data.get("body", [])
@@ -332,6 +330,109 @@ class SteadyAPISource:
             "block_count": sum(1 for r in flow if r["is_block"]),
             "total_records": len(flow),
         }
+
+
+    # ── Stock Market API (Starter plan) ────────────────────────
+
+    def get_short_interest(self, ticker: str) -> list[dict]:
+        """Short interest history: settlement dates, short volume, days to cover.
+
+        Available on Starter plan (Stock Market API).
+        """
+        if not self._has_api_key():
+            return []
+
+        try:
+            data = self._get(
+                "/v2/markets/stock/short-interest",
+                params={"ticker": ticker, "type": "STOCKS"},
+            )
+            body = data.get("body", [])
+            if not isinstance(body, list):
+                return []
+
+            records: list[dict] = []
+            for item in body:
+                records.append({
+                    "settlement_date": item.get("settlementDate", ""),
+                    "short_interest": _parse_int(item.get("interest", "")),
+                    "avg_daily_volume": _parse_int(item.get("avgDailyShareVolume", "")),
+                    "days_to_cover": float(item.get("daysToCover", 0) or 0),
+                })
+            return records
+        except httpx.HTTPStatusError as exc:
+            logger.error("SteadyAPI short-interest HTTP error for %s: %s", ticker, exc)
+            return []
+        except Exception:
+            logger.exception("SteadyAPI short-interest failed for %s", ticker)
+            return []
+
+    def get_institutional_holdings(self, ticker: str) -> dict:
+        """Institutional ownership summary: who's buying/selling, top holders.
+
+        Available on Starter plan (Stock Market API).
+        """
+        if not self._has_api_key():
+            return {}
+
+        try:
+            data = self._get(
+                "/v2/markets/stock/institutional-holdings",
+                params={"ticker": ticker, "type": "TOTAL", "limit": "15"},
+            )
+            body = data.get("body", {})
+            if not isinstance(body, dict):
+                return {}
+
+            active = body.get("activePositions", {})
+            new_sold = body.get("newSoldOutPositions", {})
+            holdings_table = body.get("holdingsTransactions", {}).get("table", {})
+
+            active_rows = active.get("rows", [])
+            new_sold_rows = new_sold.get("rows", [])
+            top_holders_rows = holdings_table.get("rows", [])
+
+            summary: dict = {
+                "active_positions": {},
+                "new_sold_positions": {},
+                "top_holders": [],
+            }
+
+            for row in active_rows:
+                key = (row.get("positions", "")
+                       .lower().replace(" ", "_"))
+                if key:
+                    summary["active_positions"][key] = {
+                        "holders": _parse_int(row.get("holders", "")),
+                        "shares": _parse_int(row.get("shares", "")),
+                    }
+
+            for row in new_sold_rows:
+                key = (row.get("positions", "")
+                       .lower().replace(" ", "_"))
+                if key:
+                    summary["new_sold_positions"][key] = {
+                        "holders": _parse_int(row.get("holders", "")),
+                        "shares": _parse_int(row.get("shares", "")),
+                    }
+
+            for row in top_holders_rows[:10]:
+                summary["top_holders"].append({
+                    "name": row.get("ownerName", ""),
+                    "date": row.get("date", ""),
+                    "shares_held": _parse_int(row.get("sharesHeld", "")),
+                    "shares_change": _parse_int(row.get("sharesChange", "")),
+                    "change_pct": row.get("sharesChangePCT", ""),
+                    "market_value_k": row.get("marketValue", ""),
+                })
+
+            return summary
+        except httpx.HTTPStatusError as exc:
+            logger.error("SteadyAPI institutional-holdings HTTP error for %s: %s", ticker, exc)
+            return {}
+        except Exception:
+            logger.exception("SteadyAPI institutional-holdings failed for %s", ticker)
+            return {}
 
 
 steadyapi_source = SteadyAPISource()

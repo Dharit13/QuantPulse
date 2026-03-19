@@ -203,14 +203,65 @@ JOB_MAP: dict[str, callable] = {
 }
 
 
+def _run_pipeline_fast() -> None:
+    """Stocks, regime, portfolio — every 2 min."""
+    from backend.pipeline import refresh_fast
+    try:
+        refresh_fast()
+    except Exception as e:
+        logger.exception("Pipeline[fast] failed: %s", e)
+
+
+def _run_pipeline_medium() -> None:
+    """Scanner, sectors, swing — every 10 min."""
+    from backend.pipeline import refresh_medium
+    try:
+        refresh_medium()
+    except Exception as e:
+        logger.exception("Pipeline[medium] failed: %s", e)
+
+
+def _run_pipeline_earnings() -> None:
+    """Earnings calendar — twice daily."""
+    from backend.pipeline import refresh_earnings_calendar
+    try:
+        refresh_earnings_calendar()
+    except Exception as e:
+        logger.exception("Pipeline[earnings] failed: %s", e)
+
+
 def register_all_jobs(scheduler: BackgroundScheduler) -> None:
     """Register every job from CALIBRATION_SCHEDULE onto the scheduler."""
+
+    # ── Tiered data pipeline ──
+    scheduler.add_job(
+        _run_pipeline_fast, "interval", minutes=2,
+        id="pipeline_fast", replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_pipeline_medium, "interval", minutes=10,
+        id="pipeline_medium", replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_pipeline_earnings, "cron", hour="7,12",
+        id="pipeline_earnings", replace_existing=True,
+    )
+    logger.info("Registered pipeline jobs: fast (2m), medium (10m), earnings (7am+12pm)")
 
     # Trade monitoring (not in calibration schedule, but essential)
     scheduler.add_job(_check_trade_alerts, "interval", minutes=15, id="trade_alerts", replace_existing=True)
     scheduler.add_job(_update_phantoms, "cron", hour=18, minute=0, id="phantom_updates", replace_existing=True)
 
+    # Calibration jobs that don't overlap with the pipeline
+    PIPELINE_HANDLED = {
+        "vol_context", "regime_detection", "strategy_weights",
+    }
+
     for name, cfg in CALIBRATION_SCHEDULE.items():
+        if name in PIPELINE_HANDLED:
+            logger.info("Skipping job %s — handled by pipeline", name)
+            continue
+
         func = JOB_MAP.get(name)
         if func is None:
             logger.warning("No handler for scheduled job: %s", name)

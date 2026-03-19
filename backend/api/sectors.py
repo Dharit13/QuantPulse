@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -339,18 +340,26 @@ def _stock_reason(rsi: float, ret_20d: float, price: float, sma_50: float) -> st
 
 @router.get("/recommendations")
 async def get_sector_recommendations(
-    refresh: bool = Query(False, description="Force fresh analysis, bypass cache"),
+    refresh: bool = Query(False, description="Force fresh analysis, bypass pipeline cache"),
 ) -> dict:
-    """30-day sector and stock recommendations based on current market regime."""
+    """30-day sector and stock recommendations from pipeline cache (instant) or live."""
+    if not refresh:
+        from backend.data.cache import data_cache
+        cached = data_cache.get("pipeline:sectors")
+        if cached and isinstance(cached, dict):
+            return cached
+
+    from backend.pipeline import refresh_sectors
+    result = refresh_sectors()
+    if result:
+        return result
+
     global _cached_result, _cached_at
-
-    if not refresh and _cached_result and (time.time() - _cached_at) < _CACHE_TTL_SECONDS:
-        age_min = (time.time() - _cached_at) / 60
-        logger.info("Returning cached recommendations (%.0f min old)", age_min)
-        return {**_cached_result, "cached": True, "cache_age_minutes": round(age_min, 1)}
-
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(_executor, _analyze_sectors)
-    _cached_result = result
+    live_result = await loop.run_in_executor(_executor, _analyze_sectors)
+    _cached_result = live_result
     _cached_at = time.time()
-    return {**result, "cached": False, "cache_age_minutes": 0}
+    return {
+        "data": live_result,
+        "refreshed_at": datetime.utcnow().isoformat(),
+    }

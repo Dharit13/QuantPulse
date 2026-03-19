@@ -109,7 +109,7 @@ def _get_scan_universe() -> list[str]:
 def _analyze_ticker_for_swing(ticker: str, max_hold_days: int, min_return_pct: float) -> dict | None:
     """Analyze a single ticker for swing trade potential."""
     try:
-        df = DataFetcher().get_daily_ohlcv(ticker, period="3mo", live=True)
+        df = _fetcher.get_daily_ohlcv(ticker, period="3mo", live=True)
         if df.empty or len(df) < 20:
             return None
 
@@ -661,8 +661,19 @@ async def get_scan_status() -> dict:
 async def get_swing_picks(
     min_return_pct: float = Query(default=30.0, ge=5.0, le=100.0, description="Minimum target return %"),
     max_hold_days: int = Query(default=10, ge=1, le=30, description="Maximum hold period in days"),
+    refresh: bool = Query(False, description="Force live scan, bypass pipeline cache"),
 ) -> dict:
-    """Synchronous scan (blocks until done). Use /start-scan + /status for async."""
+    """Swing picks from pipeline cache (instant) or live scan."""
+    if not refresh:
+        cached = data_cache.get("pipeline:swing")
+        if cached and isinstance(cached, dict):
+            return cached
+
+    from backend.pipeline import refresh_swing
+    result = refresh_swing()
+    if result:
+        return result
+
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(_executor, _run_swing_scan, min_return_pct, max_hold_days)
-    return result
+    live_result = await loop.run_in_executor(_executor, _run_swing_scan, min_return_pct, max_hold_days)
+    return {"data": live_result, "refreshed_at": datetime.utcnow().isoformat()}

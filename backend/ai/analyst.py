@@ -104,6 +104,9 @@ def _build_user_prompt(
     fundamentals: dict,
     regime: str,
     signals: list[dict],
+    dcf: dict | None = None,
+    short_interest: list | None = None,
+    institutional: dict | None = None,
 ) -> str:
     sections = [f"Stock: {ticker}\n"]
 
@@ -133,6 +136,45 @@ def _build_user_prompt(
             label = key.replace("_", " ").title()
             sections.append(f"  {label}: {val}")
 
+    if dcf:
+        sections.append("\n== DCF VALUATION ==")
+        sections.append(f"  Fair value: ${dcf.get('intrinsic_value', 'N/A')}")
+        sections.append(f"  Upside/downside: {dcf.get('upside_pct', 'N/A')}%")
+        sections.append(f"  Verdict: {dcf.get('verdict', 'N/A')}")
+        sections.append(f"  Method: {dcf.get('method', 'N/A')}")
+        if dcf.get("reasoning"):
+            sections.append(f"  Reasoning: {dcf['reasoning']}")
+
+    if short_interest and len(short_interest) >= 1:
+        sections.append("\n== SHORT INTEREST ==")
+        latest = short_interest[0]
+        sections.append(f"  Days to cover: {latest.get('days_to_cover', 'N/A')}")
+        sections.append(f"  Short shares: {latest.get('short_interest', 'N/A'):,}")
+        if len(short_interest) >= 2:
+            prev = short_interest[1]
+            curr_si = latest.get("short_interest", 0)
+            prev_si = prev.get("short_interest", 0)
+            if prev_si > 0:
+                change = (curr_si - prev_si) / prev_si * 100
+                sections.append(f"  Change vs prior: {change:+.1f}%")
+
+    if institutional and institutional.get("active_positions"):
+        sections.append("\n== INSTITUTIONAL HOLDINGS ==")
+        active = institutional["active_positions"]
+        inc = active.get("increased_positions", {})
+        dec = active.get("decreased_positions", {})
+        if inc.get("holders"):
+            sections.append(f"  Increased positions: {inc['holders']} holders")
+        if dec.get("holders"):
+            sections.append(f"  Decreased positions: {dec['holders']} holders")
+        new_sold = institutional.get("new_sold_positions", {})
+        new_p = new_sold.get("new_positions", {})
+        sold_p = new_sold.get("sold_out_positions", {})
+        if new_p.get("holders"):
+            sections.append(f"  New positions: {new_p['holders']} holders")
+        if sold_p.get("holders"):
+            sections.append(f"  Sold out: {sold_p['holders']} holders")
+
     sections.append(f"\n== MACRO REGIME ==")
     sections.append(f"  Current regime: {regime.replace('_', ' ')}")
 
@@ -154,6 +196,9 @@ def ai_system_take(
     fundamentals: dict,
     regime: str,
     signals: list[dict],
+    dcf: dict | None = None,
+    short_interest: list | None = None,
+    institutional: dict | None = None,
 ) -> dict | None:
     """Generate AI-powered system take using Claude.
 
@@ -168,7 +213,10 @@ def ai_system_take(
         logger.warning("anthropic package not installed — pip install anthropic")
         return None
 
-    user_prompt = _build_user_prompt(ticker, technicals, fundamentals, regime, signals)
+    user_prompt = _build_user_prompt(
+        ticker, technicals, fundamentals, regime, signals,
+        dcf=dcf, short_interest=short_interest, institutional=institutional,
+    )
 
     try:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)

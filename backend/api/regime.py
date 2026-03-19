@@ -4,45 +4,33 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Query
 
-from backend.data.fetcher import DataFetcher
+from backend.data.cache import data_cache
 from backend.models.database import RegimeRecord, SessionLocal
 from backend.models.schemas import Regime, RegimeSnapshot
-from backend.regime.detector import detect_regime
 
 router = APIRouter(prefix="/regime", tags=["regime"])
 logger = logging.getLogger(__name__)
-_fetcher = DataFetcher()
 
 
-@router.get("/current", response_model=RegimeSnapshot)
-async def get_current_regime() -> RegimeSnapshot:
-    """Detect and return the current market regime."""
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
-    result = detect_regime(vix_df, spy_df)
+@router.get("/current")
+async def get_current_regime(
+    refresh: bool = Query(False, description="Force live computation, bypass pipeline cache"),
+) -> dict:
+    """Return the current market regime from pipeline cache (instant) or live."""
+    if not refresh:
+        cached = data_cache.get("pipeline:regime")
+        if cached and isinstance(cached, dict):
+            return cached
 
-    indicators = result.get("indicators", {})
-    vix_val = indicators.get("vix", {}).get("vix", 18.0) if isinstance(indicators.get("vix"), dict) else 18.0
-    breadth = indicators.get("breadth", {}).get("pct_above_200sma", 50.0) if isinstance(indicators.get("breadth"), dict) else 50.0
-    adx = indicators.get("adx", {}).get("adx", 20.0) if isinstance(indicators.get("adx"), dict) else 20.0
+    from backend.pipeline import refresh_regime
+    result = refresh_regime()
+    if result:
+        return result
 
-    snapshot = RegimeSnapshot(
-        timestamp=datetime.utcnow(),
-        regime=result["regime"],
-        confidence=result["confidence"],
-        regime_probabilities=result["probabilities"],
-        vix=vix_val,
-        breadth_pct=breadth,
-        adx=adx,
-        strategy_weights=result.get("strategy_weights", {}),
-    )
-
-    _persist_regime(snapshot)
-    return snapshot
+    return {"error": "Regime detection failed", "regime": "unknown"}
 
 
 @router.get("/history", response_model=list[RegimeSnapshot])

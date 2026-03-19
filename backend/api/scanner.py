@@ -250,12 +250,23 @@ def _run_scan(
 # ── Endpoints ────────────────────────────────────────────────
 
 
-@router.get("/", response_model=ScannerResult)
+@router.get("/")
 async def scan_universe(
     max_signals: int = Query(default=10, ge=1, le=50),
     min_score: float = Query(default=60.0, ge=0, le=100),
-) -> ScannerResult:
-    """Synchronous scan (blocks until done). Use /start-scan + /status for async."""
+    refresh: bool = Query(False, description="Force live scan, bypass pipeline cache"),
+) -> dict:
+    """Returns scanner results from pipeline cache (instant) or live."""
+    if not refresh:
+        cached = data_cache.get("pipeline:scanner")
+        if cached and isinstance(cached, dict):
+            return cached
+
+    from backend.pipeline import refresh_scanner
+    result = refresh_scanner()
+    if result:
+        return result
+
     vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
     spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
     regime_result = detect_regime(vix_df, spy_df)
@@ -270,12 +281,16 @@ async def scan_universe(
     filtered.sort(key=lambda e: e.signal.conviction, reverse=True)
     filtered = filtered[:max_signals]
 
-    return ScannerResult(
+    result_obj = ScannerResult(
         timestamp=datetime.utcnow(),
         regime=regime,
         signals=filtered,
         total_signals=len(all_signals),
     )
+    return {
+        "data": result_obj.model_dump(mode="json"),
+        "refreshed_at": datetime.utcnow().isoformat(),
+    }
 
 
 # ── Background scan ──────────────────────────────────────────
