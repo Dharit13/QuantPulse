@@ -1,10 +1,10 @@
 ---
-description: Streamlit dashboard patterns for QuantPulse frontend
-globs: "frontend/**/*.py"
+description: Next.js dashboard patterns for QuantPulse frontend
+globs: "frontend/**/*.{ts,tsx,js,jsx}"
 alwaysApply: false
 ---
 
-# Streamlit Dashboard Rules
+# Next.js Dashboard Rules
 
 ## Pages
 1. **Morning Command Center** — regime, VIX, top signals with action buttons, active trades, exit alerts
@@ -18,9 +18,8 @@ Every signal shows: ticker, direction, strategy, score, entry/stop/target, R/R r
 Three action buttons: [Take Trade] (opens log form), [Pass] (logs skip + reason), [Remind Later].
 
 ## Styling
-- Use `st.columns`, `st.metric`, `st.plotly_chart` for layout
 - Regime color coding: bull_trend=green, bull_choppy=yellow, bear_trend=orange, crisis=red, mean_reverting=blue
 - Auto-refresh during market hours (9:30 AM - 4:00 PM EST)
 
 ## Data Flow
-Frontend calls FastAPI backend via HTTP. Never compute signals in Streamlit directly.
+Frontend calls FastAPI backend via HTTP. Never compute signals in Next.js directly.

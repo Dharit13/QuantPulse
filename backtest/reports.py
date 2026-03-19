@@ -1,7 +1,7 @@
 """Backtest tear sheet / report generation.
 
 Takes a BacktestResult and produces structured data suitable for
-Streamlit rendering (Sprint 5) or CLI inspection.
+Next.js rendering or CLI inspection.
 
 Outputs:
   - Summary statistics table

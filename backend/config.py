@@ -46,8 +46,8 @@ class Settings(BaseSettings):
     # ── Execution Mode ──
     execution_mode: str = "advisory"
 
-    # ── Database ──
-    database_url: str = "sqlite:///./quantpulse.db"
+    # ── Database (Supabase PostgreSQL) ──
+    database_url: str = ""
 
     # ── Alert Delivery ──
     ntfy_topic: str = "quantpulse-alerts"

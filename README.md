@@ -130,9 +130,9 @@ The **Regime Detection Engine** classifies the market into one of five states (b
 ## Stack
 
 - **Backend**: Python 3.11+ / FastAPI
-- **Frontend**: Streamlit
+- **Frontend**: Next.js
 - **Data**: yfinance (free), FMP, SteadyAPI, FINRA ATS, SEC EDGAR (paid sources feature-flagged)
-- **Database**: SQLite (dev) / PostgreSQL (prod)
+- **Database**: Supabase (PostgreSQL)
 - **Live scan universe**: Dynamic S&P 500 from Wikipedia (cached weekly), no hardcoded watchlists
 - **Backtest universe**: Must use point-in-time membership snapshots to avoid survivorship bias (live scan universe is NOT safe for backtesting)
 - **No broker integration**: advisory only, human executes trades
