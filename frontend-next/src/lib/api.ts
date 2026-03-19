@@ -53,7 +53,7 @@ export async function apiGet<T>(
     return cached.data as T;
   }
 
-  if (_inflight[cacheKey]) {
+  if (cacheKey in _inflight) {
     return _inflight[cacheKey] as Promise<T | null>;
   }
 
