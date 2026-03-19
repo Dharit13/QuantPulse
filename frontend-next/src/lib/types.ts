@@ -106,9 +106,27 @@ export interface AnalysisData {
       action: string;
       headline: string;
       reasoning: string;
+      simple?: string;
       hold_days: number;
       stop_price: number;
       target_price: number;
+    };
+  };
+  dcf_valuation?: {
+    intrinsic_value: number;
+    current_price: number;
+    upside_pct: number;
+    verdict: string;
+    margin_of_safety: number;
+    reasoning?: string;
+    assumptions: {
+      fcf_latest: number;
+      growth_rate: number;
+      discount_rate: number;
+      terminal_growth: number;
+      shares_outstanding: number;
+      projection_years: number;
+      net_cash?: number;
     };
   };
   trade_plan: {
