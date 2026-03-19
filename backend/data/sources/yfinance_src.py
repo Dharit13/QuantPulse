@@ -37,7 +37,8 @@ class YFinanceSource:
     ) -> dict[str, pd.DataFrame]:
         results = {}
         try:
-            data = yf.download(tickers, period=period, group_by="ticker", auto_adjust=True, threads=True)
+            logger.info("Downloading %d tickers...", len(tickers))
+            data = yf.download(tickers, period=period, group_by="ticker", auto_adjust=True, threads=True, progress=False)
             if isinstance(data.columns, pd.MultiIndex):
                 for ticker in tickers:
                     try:
@@ -47,6 +48,7 @@ class YFinanceSource:
             else:
                 # Single ticker case
                 results[tickers[0]] = data.dropna(how="all")
+            logger.info("Download complete — %d tickers fetched", len(results))
         except Exception:
             logger.exception("Batch download failed, falling back to individual fetches")
             for ticker in tickers:
