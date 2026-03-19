@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 
 import pandas as pd
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 
 from backend.models.database import CacheRecord, SessionLocal
 
@@ -19,8 +19,13 @@ class DataCache:
             if record is None:
                 return None
             if datetime.utcnow() > record.expires_at:
-                session.delete(record)
-                session.commit()
+                try:
+                    session.execute(
+                        delete(CacheRecord).where(CacheRecord.cache_key == key)
+                    )
+                    session.commit()
+                except Exception:
+                    session.rollback()
                 return None
             data = json.loads(record.data_json)
             if isinstance(data, dict) and data.get("__type__") == "dataframe":
@@ -37,18 +42,27 @@ class DataCache:
             serialized = json.dumps(value, default=str)
 
         with SessionLocal() as session:
-            existing = session.query(CacheRecord).filter_by(cache_key=key).first()
-            if existing:
-                existing.data_json = serialized
-                existing.expires_at = expires
-                existing.created_at = datetime.utcnow()
-            else:
-                session.add(CacheRecord(
-                    cache_key=key,
-                    data_json=serialized,
-                    expires_at=expires,
-                ))
-            session.commit()
+            try:
+                session.execute(
+                    text(
+                        "INSERT INTO data_cache (cache_key, data_json, created_at, expires_at) "
+                        "VALUES (:key, :data, :created, :expires) "
+                        "ON CONFLICT(cache_key) DO UPDATE SET "
+                        "data_json = excluded.data_json, "
+                        "created_at = excluded.created_at, "
+                        "expires_at = excluded.expires_at"
+                    ),
+                    {
+                        "key": key,
+                        "data": serialized,
+                        "created": datetime.utcnow(),
+                        "expires": expires,
+                    },
+                )
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception("Cache set failed for key %s", key)
 
     def invalidate(self, key: str) -> None:
         with SessionLocal() as session:

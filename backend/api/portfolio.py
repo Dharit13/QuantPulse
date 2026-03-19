@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from fastapi import APIRouter, Query
 
@@ -23,8 +24,8 @@ _executor = ThreadPoolExecutor(max_workers=2)
 @router.get("/state", response_model=PortfolioState)
 async def get_portfolio_state() -> PortfolioState:
     """Current portfolio state including active trades and risk metrics."""
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
     regime_result = detect_regime(vix_df, spy_df)
     regime: Regime = regime_result["regime"]
     confidence = regime_result["confidence"]
@@ -85,10 +86,10 @@ async def check_alerts() -> list[dict]:
 def _build_quick_portfolio(capital: float) -> dict:
     """Combine sector recs + scanner signals, pick top 3, allocate dollars."""
     from backend.api.sectors import _analyze_sectors
-    from backend.api.scanner import _run_scan, SCAN_WATCHLIST
+    from backend.api.scanner import _run_scan
 
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
     regime_result = detect_regime(vix_df, spy_df)
     regime: Regime = regime_result["regime"]
     vol = compute_vol_context(spy_df, vix_df)
@@ -96,46 +97,55 @@ def _build_quick_portfolio(capital: float) -> dict:
     scored: dict[str, dict] = {}
     signal_map: dict[str, TradeSignal] = {}
 
-    try:
-        sector_data = _analyze_sectors()
-        for pick in sector_data.get("stock_picks", []):
-            ticker = pick["ticker"]
+    sector_data: dict = {}
+    signals: list = []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        sector_future = pool.submit(_analyze_sectors)
+        scanner_future = pool.submit(_run_scan, vol, regime)
+
+        try:
+            sector_data = sector_future.result()
+        except Exception as e:
+            logger.warning("Sector recs failed for quick portfolio: %s", e)
+
+        try:
+            signals = scanner_future.result()
+        except Exception as e:
+            logger.warning("Scanner failed for quick portfolio: %s", e)
+
+    for pick in sector_data.get("stock_picks", []):
+        ticker = pick["ticker"]
+        scored[ticker] = {
+            "ticker": ticker,
+            "name": pick.get("name", ticker),
+            "sector": pick.get("sector", "Unknown"),
+            "price": pick.get("price", 0),
+            "score": pick.get("score", 50),
+            "why": pick.get("why", ""),
+            "source": "sector",
+        }
+
+    for sig in signals:
+        ticker = sig.ticker
+        sig_score = sig.signal_score
+        signal_map[ticker] = sig
+        if ticker in scored:
+            scored[ticker]["score"] = (scored[ticker]["score"] + sig_score) / 2 + 10
+            scored[ticker]["source"] = "both"
+            if sig.edge_reason:
+                scored[ticker]["why"] += f"; signal: {sig.edge_reason}"
+        else:
+            price = sig.entry_price or _fetcher.get_current_price(ticker) or 0
             scored[ticker] = {
                 "ticker": ticker,
-                "name": pick.get("name", ticker),
-                "sector": pick.get("sector", "Unknown"),
-                "price": pick.get("price", 0),
-                "score": pick.get("score", 50),
-                "why": pick.get("why", ""),
-                "source": "sector",
+                "name": ticker,
+                "sector": "Unknown",
+                "price": price,
+                "score": sig_score,
+                "why": sig.edge_reason or sig.strategy.value,
+                "source": "scanner",
             }
-    except Exception as e:
-        logger.warning("Sector recs failed for quick portfolio: %s", e)
-
-    try:
-        signals = _run_scan(vol, regime)
-        for sig in signals:
-            ticker = sig.ticker
-            sig_score = sig.signal_score
-            signal_map[ticker] = sig
-            if ticker in scored:
-                scored[ticker]["score"] = (scored[ticker]["score"] + sig_score) / 2 + 10
-                scored[ticker]["source"] = "both"
-                if sig.edge_reason:
-                    scored[ticker]["why"] += f"; signal: {sig.edge_reason}"
-            else:
-                price = sig.entry_price or _fetcher.get_current_price(ticker) or 0
-                scored[ticker] = {
-                    "ticker": ticker,
-                    "name": ticker,
-                    "sector": "Unknown",
-                    "price": price,
-                    "score": sig_score,
-                    "why": sig.edge_reason or sig.strategy.value,
-                    "source": "scanner",
-                }
-    except Exception as e:
-        logger.warning("Scanner failed for quick portfolio: %s", e)
 
     if not scored:
         return {"picks": [], "capital": capital, "regime": regime.value}
@@ -168,7 +178,7 @@ def _build_quick_portfolio(capital: float) -> dict:
 
         if not p.get("stop_loss") or not p.get("target"):
             try:
-                df = _fetcher.get_daily_ohlcv(ticker, period="3mo")
+                df = _fetcher.get_daily_ohlcv(ticker, period="3mo", live=True)
                 if not df.empty and len(df) >= 14:
                     close = df["Close"]
                     high = df["High"]
@@ -230,6 +240,7 @@ _portfolio_state: dict = {
     "total": 4,
     "step": "",
     "result": None,
+    "result_timestamp": None,
     "error": None,
 }
 
@@ -244,62 +255,68 @@ def _run_portfolio_background(capital: float) -> None:
         _portfolio_state["step"] = "Detecting market regime..."
 
         from backend.api.sectors import _analyze_sectors
-        from backend.api.scanner import _run_scan, SCAN_WATCHLIST
+        from backend.api.scanner import _run_scan
 
-        vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-        spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+        vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+        spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
         regime_result = detect_regime(vix_df, spy_df)
         regime: Regime = regime_result["regime"]
         vol = compute_vol_context(spy_df, vix_df)
         _portfolio_state["progress"] = 1
-        _portfolio_state["step"] = "Analyzing sectors and picking top stocks..."
+        _portfolio_state["step"] = "Analyzing sectors and scanning signals (parallel)..."
 
         scored: dict[str, dict] = {}
         signal_map: dict[str, TradeSignal] = {}
 
-        try:
-            sector_data = _analyze_sectors()
-            for pick in sector_data.get("stock_picks", []):
-                ticker = pick["ticker"]
+        sector_data: dict = {}
+        signals: list = []
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            sector_future = pool.submit(_analyze_sectors)
+            scanner_future = pool.submit(_run_scan, vol, regime)
+
+            try:
+                sector_data = sector_future.result()
+            except Exception as e:
+                logger.warning("Sector recs failed for quick portfolio: %s", e)
+
+            try:
+                signals = scanner_future.result()
+            except Exception as e:
+                logger.warning("Scanner failed for quick portfolio: %s", e)
+
+        for pick in sector_data.get("stock_picks", []):
+            ticker = pick["ticker"]
+            scored[ticker] = {
+                "ticker": ticker,
+                "name": pick.get("name", ticker),
+                "sector": pick.get("sector", "Unknown"),
+                "price": pick.get("price", 0),
+                "score": pick.get("score", 50),
+                "why": pick.get("why", ""),
+                "source": "sector",
+            }
+
+        for sig in signals:
+            ticker = sig.ticker
+            sig_score = sig.signal_score
+            signal_map[ticker] = sig
+            if ticker in scored:
+                scored[ticker]["score"] = (scored[ticker]["score"] + sig_score) / 2 + 10
+                scored[ticker]["source"] = "both"
+                if sig.edge_reason:
+                    scored[ticker]["why"] += f"; signal: {sig.edge_reason}"
+            else:
+                price = sig.entry_price or _fetcher.get_current_price(ticker) or 0
                 scored[ticker] = {
                     "ticker": ticker,
-                    "name": pick.get("name", ticker),
-                    "sector": pick.get("sector", "Unknown"),
-                    "price": pick.get("price", 0),
-                    "score": pick.get("score", 50),
-                    "why": pick.get("why", ""),
-                    "source": "sector",
+                    "name": ticker,
+                    "sector": "Unknown",
+                    "price": price,
+                    "score": sig_score,
+                    "why": sig.edge_reason or sig.strategy.value,
+                    "source": "scanner",
                 }
-        except Exception as e:
-            logger.warning("Sector recs failed for quick portfolio: %s", e)
-
-        _portfolio_state["progress"] = 2
-        _portfolio_state["step"] = "Running strategy scanner..."
-
-        try:
-            signals = _run_scan(vol, regime)
-            for sig in signals:
-                ticker = sig.ticker
-                sig_score = sig.signal_score
-                signal_map[ticker] = sig
-                if ticker in scored:
-                    scored[ticker]["score"] = (scored[ticker]["score"] + sig_score) / 2 + 10
-                    scored[ticker]["source"] = "both"
-                    if sig.edge_reason:
-                        scored[ticker]["why"] += f"; signal: {sig.edge_reason}"
-                else:
-                    price = sig.entry_price or _fetcher.get_current_price(ticker) or 0
-                    scored[ticker] = {
-                        "ticker": ticker,
-                        "name": ticker,
-                        "sector": "Unknown",
-                        "price": price,
-                        "score": sig_score,
-                        "why": sig.edge_reason or sig.strategy.value,
-                        "source": "scanner",
-                    }
-        except Exception as e:
-            logger.warning("Scanner failed for quick portfolio: %s", e)
 
         _portfolio_state["progress"] = 3
         _portfolio_state["step"] = "Building entry/exit plans..."
@@ -355,6 +372,7 @@ def _run_portfolio_background(capital: float) -> None:
 
         result = {"picks": ranked, "capital": capital, "regime": regime.value}
         _portfolio_state["result"] = result
+        _portfolio_state["result_timestamp"] = datetime.utcnow().isoformat()
         _portfolio_state["progress"] = 4
         _portfolio_state["step"] = "Done"
         _portfolio_state["status"] = "done"
@@ -395,6 +413,8 @@ async def get_portfolio_build_status() -> dict:
             result = cached
             _portfolio_state["status"] = "done"
             _portfolio_state["result"] = cached
+            if not _portfolio_state.get("result_timestamp"):
+                _portfolio_state["result_timestamp"] = datetime.utcnow().isoformat()
 
     return {
         "status": _portfolio_state["status"],
@@ -402,5 +422,6 @@ async def get_portfolio_build_status() -> dict:
         "total": _portfolio_state["total"],
         "step": _portfolio_state["step"],
         "result": result,
+        "result_timestamp": _portfolio_state.get("result_timestamp"),
         "error": _portfolio_state["error"],
     }

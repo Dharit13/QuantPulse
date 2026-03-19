@@ -130,17 +130,18 @@ class RateLimiter:
             try:
                 resp = client.request(method, url, **kwargs)
                 if resp.status_code == 429:
-                    retry_after = float(resp.headers.get("Retry-After", base_backoff * 2**attempt))
-                    logger.warning(
-                        "%s rate-limited (429), retry %d/%d in %.1fs",
-                        source,
-                        attempt + 1,
-                        max_retries,
-                        retry_after,
-                    )
                     if attempt < max_retries:
+                        retry_after = float(resp.headers.get("Retry-After", base_backoff * 2**attempt))
+                        logger.warning(
+                            "%s rate-limited (429), retry %d/%d in %.1fs",
+                            source,
+                            attempt + 1,
+                            max_retries,
+                            retry_after,
+                        )
                         time.sleep(retry_after)
                         continue
+                    logger.warning("%s rate-limited (429), all %d retries exhausted", source, max_retries)
                 resp.raise_for_status()
                 return resp
             except httpx.HTTPStatusError:
@@ -148,16 +149,16 @@ class RateLimiter:
                     continue
                 raise
             except httpx.RequestError as exc:
-                backoff = base_backoff * 2**attempt
-                logger.warning(
-                    "%s request error (%s), retry %d/%d in %.1fs",
-                    source,
-                    exc,
-                    attempt + 1,
-                    max_retries,
-                    backoff,
-                )
                 if attempt < max_retries:
+                    backoff = base_backoff * 2**attempt
+                    logger.warning(
+                        "%s request error (%s), retry %d/%d in %.1fs",
+                        source,
+                        exc,
+                        attempt + 1,
+                        max_retries,
+                        backoff,
+                    )
                     time.sleep(backoff)
                     continue
                 raise
@@ -186,17 +187,18 @@ class RateLimiter:
             try:
                 resp = await client.request(method, url, **kwargs)
                 if resp.status_code == 429:
-                    retry_after = float(resp.headers.get("Retry-After", base_backoff * 2**attempt))
-                    logger.warning(
-                        "%s rate-limited (429), retry %d/%d in %.1fs",
-                        source,
-                        attempt + 1,
-                        max_retries,
-                        retry_after,
-                    )
                     if attempt < max_retries:
+                        retry_after = float(resp.headers.get("Retry-After", base_backoff * 2**attempt))
+                        logger.warning(
+                            "%s rate-limited (429), retry %d/%d in %.1fs",
+                            source,
+                            attempt + 1,
+                            max_retries,
+                            retry_after,
+                        )
                         await asyncio.sleep(retry_after)
                         continue
+                    logger.warning("%s rate-limited (429), all %d retries exhausted", source, max_retries)
                 resp.raise_for_status()
                 return resp
             except httpx.HTTPStatusError:
@@ -204,16 +206,16 @@ class RateLimiter:
                     continue
                 raise
             except httpx.RequestError as exc:
-                backoff = base_backoff * 2**attempt
-                logger.warning(
-                    "%s request error (%s), retry %d/%d in %.1fs",
-                    source,
-                    exc,
-                    attempt + 1,
-                    max_retries,
-                    backoff,
-                )
                 if attempt < max_retries:
+                    backoff = base_backoff * 2**attempt
+                    logger.warning(
+                        "%s request error (%s), retry %d/%d in %.1fs",
+                        source,
+                        exc,
+                        attempt + 1,
+                        max_retries,
+                        backoff,
+                    )
                     await asyncio.sleep(backoff)
                     continue
                 raise

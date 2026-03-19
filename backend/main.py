@@ -20,6 +20,11 @@ scheduler = BackgroundScheduler()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    from backend.data.cache import data_cache
+    cleared = data_cache.clear_expired()
+    if cleared:
+        import logging
+        logging.getLogger(__name__).info("Startup: cleared %d expired cache entries", cleared)
     register_all_jobs(scheduler)
     scheduler.start()
     yield
