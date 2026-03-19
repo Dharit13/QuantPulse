@@ -5,7 +5,6 @@ WORKDIR /app/frontend-next
 COPY frontend-next/package.json frontend-next/package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY frontend-next/ ./
-ENV NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 RUN npm run build
 
 # Stage 2: Python runtime with both services
