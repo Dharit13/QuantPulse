@@ -7,10 +7,9 @@ Layer 4: Black swan protection (tail hedges)
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
-import pandas as pd
 
 from backend.adaptive.risk_scaling import get_adaptive_risk_limits
 from backend.adaptive.vol_context import VolContext
@@ -60,7 +59,7 @@ class RiskManager:
         # Layer 2: Strategy-level circuit breaker
         strategy = signal.strategy.value
         if strategy in self.strategy_pause_until:
-            if datetime.utcnow() < self.strategy_pause_until[strategy]:
+            if datetime.now(timezone.utc) < self.strategy_pause_until[strategy]:
                 reasons.append(f"REJECTED: Strategy {strategy} is paused until {self.strategy_pause_until[strategy]}")
                 return {"approved": False, "reasons": reasons, "adjusted_size": 0}
 
@@ -72,16 +71,8 @@ class RiskManager:
             reasons.append(f"Gross exposure capped at {limits['max_gross_exposure']:.0%}")
 
         # Net exposure check: +80% long max, -30% short max
-        long_exp = sum(
-            t.kelly_size_pct / 100
-            for t in active_trades
-            if t.direction == "long"
-        )
-        short_exp = sum(
-            t.kelly_size_pct / 100
-            for t in active_trades
-            if t.direction == "short"
-        )
+        long_exp = sum(t.kelly_size_pct / 100 for t in active_trades if t.direction == "long")
+        short_exp = sum(t.kelly_size_pct / 100 for t in active_trades if t.direction == "short")
         if signal.direction == "long":
             new_net = (long_exp + adjusted_size) - short_exp
             if new_net > limits["max_net_exposure_long"]:
@@ -166,10 +157,10 @@ class RiskManager:
         self.strategy_drawdowns[strategy] = pnl_20d
 
         if pnl_20d < -0.10:
-            self.strategy_pause_until[strategy] = datetime.utcnow() + timedelta(days=20)
+            self.strategy_pause_until[strategy] = datetime.now(timezone.utc) + timedelta(days=20)
             logger.warning("Strategy %s SHUTDOWN: 20-day drawdown %.1f%% — paused 20 days", strategy, pnl_20d * 100)
         elif pnl_20d < -0.05:
-            self.strategy_pause_until[strategy] = datetime.utcnow() + timedelta(days=5)
+            self.strategy_pause_until[strategy] = datetime.now(timezone.utc) + timedelta(days=5)
             logger.warning("Strategy %s PAUSED: 20-day drawdown %.1f%% — paused 5 days", strategy, pnl_20d * 100)
 
     def _compute_drawdown(self) -> float:

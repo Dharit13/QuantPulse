@@ -8,12 +8,12 @@ Formula: adaptive_hold = base_hold_days / speed_scale
 from backend.adaptive.vol_context import VolContext
 
 BASE_HOLD_PERIODS = {
-    "stat_arb":       {"min": 3,   "max": 20,  "typical": 10},
-    "catalyst_pead":  {"min": 5,   "max": 40,  "typical": 25},
-    "catalyst_rev":   {"min": 5,   "max": 30,  "typical": 15},
-    "cross_asset":    {"min": 3,   "max": 15,  "typical": 8},
-    "flow":           {"min": 2,   "max": 10,  "typical": 5},
-    "gap_reversion":  {"min": 0.1, "max": 0.5, "typical": 0.25},
+    "stat_arb": {"min": 3, "max": 20, "typical": 10},
+    "catalyst_pead": {"min": 5, "max": 40, "typical": 25},
+    "catalyst_rev": {"min": 5, "max": 30, "typical": 15},
+    "cross_asset": {"min": 3, "max": 15, "typical": 8},
+    "flow": {"min": 2, "max": 10, "typical": 5},
+    "gap_reversion": {"min": 0.1, "max": 0.5, "typical": 0.25},
 }
 
 

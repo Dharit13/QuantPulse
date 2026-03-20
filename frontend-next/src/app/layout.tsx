@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Sidebar } from "@/components/sidebar";
 import { MarketStatusBar } from "@/components/market-status-bar";
-import { ScanProvider } from "@/context/scan-context";
 import { AnalysisProvider } from "@/context/analysis-context";
 import "./globals.css";
 
@@ -34,17 +33,15 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased bg-background`}
       >
-        <ScanProvider>
-          <AnalysisProvider>
-            <Sidebar />
-            <main className="ml-[250px] min-h-screen transition-all duration-200">
-              <div className="max-w-[1400px] mx-auto px-10 py-8">
-                <MarketStatusBar />
-                {children}
-              </div>
-            </main>
-          </AnalysisProvider>
-        </ScanProvider>
+        <AnalysisProvider>
+          <Sidebar />
+          <main className="ml-[250px] min-h-screen transition-all duration-200">
+            <div className="max-w-[1400px] mx-auto px-10 py-8">
+              <MarketStatusBar />
+              {children}
+            </div>
+          </main>
+        </AnalysisProvider>
       </body>
     </html>
   );

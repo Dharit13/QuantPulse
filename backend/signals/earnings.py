@@ -76,16 +76,12 @@ def detect_pead(
 
     surprise_pct = latest.get("surprise_pct")
     if surprise_pct is None:
-        surprise_pct = score_earnings_surprise(
-            latest["eps_actual"], latest["eps_estimate"]
-        )
+        surprise_pct = score_earnings_surprise(latest["eps_actual"], latest["eps_estimate"])
 
     if abs(surprise_pct) < params["min_eps_surprise_pct"]:
         return None
 
-    earnings_day_return = yfinance_source.get_earnings_day_return(
-        ticker, report_date.isoformat()
-    )
+    earnings_day_return = yfinance_source.get_earnings_day_return(ticker, report_date.isoformat())
     if earnings_day_return is None:
         return None
 

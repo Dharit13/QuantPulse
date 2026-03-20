@@ -15,11 +15,10 @@ EDGAR full-text search API: https://efts.sec.gov/LATEST/search-index
 """
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from xml.etree import ElementTree
 
 import httpx
-import pandas as pd
 
 from backend.config import settings
 from backend.data.rate_limiter import rate_limiter
@@ -72,10 +71,13 @@ class EDGARSource:
         return resp.json()
 
     def _get_text(self, url: str) -> str:
-        """Rate-limited GET returning raw text (for XML parsing)."""
-        rate_limiter.acquire(self.SOURCE_NAME)
-        resp = self._http.get(url)
-        resp.raise_for_status()
+        """Rate-limited GET with retry returning raw text (for XML parsing)."""
+        resp = rate_limiter.request_with_retry(
+            self.SOURCE_NAME,
+            self._http,
+            "GET",
+            url,
+        )
         return resp.text
 
     # ── CIK Lookup ──────────────────────────────────────────────
@@ -235,17 +237,19 @@ class EDGARSource:
             ownership_el = txn.find(f".//{ns}directOrIndirectOwnership/{ns}value")
             ownership = "direct" if ownership_el is None or ownership_el.text == "D" else "indirect"
 
-            records.append({
-                "ticker": ticker,
-                "filing_date": filing_date,
-                "insider_name": insider_name,
-                "title": title,
-                "transaction_type": txn_type,
-                "shares": int(shares),
-                "price": round(price, 2),
-                "value": round(shares * price, 2),
-                "ownership_type": ownership,
-            })
+            records.append(
+                {
+                    "ticker": ticker,
+                    "filing_date": filing_date,
+                    "insider_name": insider_name,
+                    "title": title,
+                    "transaction_type": txn_type,
+                    "shares": int(shares),
+                    "price": round(price, 2),
+                    "value": round(shares * price, 2),
+                    "ownership_type": ownership,
+                }
+            )
 
         return records
 
@@ -289,10 +293,7 @@ class EDGARSource:
         cluster_buy = len(recent_buyers) >= 2
 
         c_suite_titles = {"ceo", "cfo", "coo", "chief executive", "chief financial", "chief operating", "president"}
-        c_suite_buying = any(
-            any(cs in t.get("title", "").lower() for cs in c_suite_titles)
-            for t in buys
-        )
+        c_suite_buying = any(any(cs in t.get("title", "").lower() for cs in c_suite_titles) for t in buys)
 
         # Composite scoring — calibrated so typical insider activity scores
         # 40-60, and only exceptional activity reaches 80+.
@@ -370,12 +371,14 @@ class EDGARSource:
             # This is a simplified approach — full 13F parsing would require
             # downloading and parsing SGML/XML information tables
             company_name = data.get("name", "")
-            return [{
-                "ticker": ticker,
-                "company_name": company_name,
-                "cik": cik,
-                "note": "Full 13F institutional holdings parsing available via EDGAR XBRL feeds",
-            }]
+            return [
+                {
+                    "ticker": ticker,
+                    "company_name": company_name,
+                    "cik": cik,
+                    "note": "Full 13F institutional holdings parsing available via EDGAR XBRL feeds",
+                }
+            ]
         except Exception:
             logger.debug("13F lookup failed for %s", ticker)
             return []

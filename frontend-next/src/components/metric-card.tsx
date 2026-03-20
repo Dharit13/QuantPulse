@@ -26,7 +26,7 @@ export function MetricCard({
   return (
     <div
       className={cn(
-        "bg-card rounded-2xl px-5 py-4 border border-border",
+        "bg-card rounded-2xl px-5 py-4 border border-border transition-all duration-200 hover:translate-y-[-2px] hover:shadow-[var(--shadow-card-hover)]",
         className
       )}
       style={{ boxShadow: "var(--shadow-card)" }}

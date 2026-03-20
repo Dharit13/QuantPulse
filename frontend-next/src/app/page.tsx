@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { ChevronDown } from "lucide-react";
 import { PulseLoader, PulseInline } from "@/components/pulse-loader";
 import { PageHeader } from "@/components/page-header";
 import { MetricCard } from "@/components/metric-card";
@@ -12,6 +13,7 @@ import { CacheAge } from "@/components/cache-age";
 import { apiGet, apiPost } from "@/lib/api";
 import { formatDollar } from "@/lib/utils";
 import { fallbackEntrySignal, type EntrySignal } from "@/lib/entry-timing";
+import { useSSEScan } from "@/hooks/use-sse-scan";
 import type {
   RegimeData,
   AIResult,
@@ -45,18 +47,6 @@ interface AllocationAI {
   } | null;
 }
 
-interface EntryTimingAI {
-  result: {
-    entries: Array<{
-      ticker: string;
-      label: string;
-      detail: string;
-      simple?: string;
-      variant: "green" | "amber" | "red";
-    }>;
-  } | null;
-}
-
 // ---------------------------------------------------------------------------
 // Module-level cache — survives React navigation / remounts so the dashboard
 // loads instantly when you come back instead of refetching 4 AI calls.
@@ -68,8 +58,6 @@ interface DashboardCache {
   actionBanner: MarketActionAI["result"] | null;
   allocAI: Record<string, { name: string; explanation: string }>;
   recs: SectorRecommendations | null;
-  recsCacheAge: number | null;
-  entrySignals: Record<string, EntrySignal>;
   fetchedAt: string | null;
 }
 
@@ -80,8 +68,6 @@ const _cache: DashboardCache = {
   actionBanner: null,
   allocAI: {},
   recs: null,
-  recsCacheAge: null,
-  entrySignals: {},
   fetchedAt: null,
 };
 
@@ -90,18 +76,57 @@ function AllocationBar({
   description,
   pct,
   color,
+  signalCount,
+  isActive,
+  healthStatus,
 }: {
   label: string;
   description: string;
   pct: number;
   color: string;
+  signalCount?: number;
+  isActive?: boolean;
+  healthStatus?: string;
 }) {
+  const healthBadge = healthStatus && healthStatus !== "healthy" && healthStatus !== "unknown" && healthStatus !== "insufficient_data" ? (
+    <span
+      className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
+        healthStatus === "paused"
+          ? "bg-qp-red/10 text-qp-red"
+          : "bg-qp-amber/10 text-qp-amber"
+      }`}
+    >
+      {healthStatus === "paused" ? "paused" : "degraded"}
+    </span>
+  ) : null;
+
   return (
     <div className="mb-3">
       <div className="flex justify-between items-center mb-1">
-        <span className="text-[13px] font-semibold text-text-primary">
-          {label}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold text-text-primary">
+            {label}
+          </span>
+          {isActive !== undefined && (
+            <span
+              className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
+                isActive
+                  ? "bg-qp-green/10 text-qp-green"
+                  : "bg-card-alt text-text-muted"
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isActive ? "bg-qp-green" : "bg-text-muted"
+                }`}
+              />
+              {isActive
+                ? `${signalCount ?? 0} signal${signalCount !== 1 ? "s" : ""}`
+                : "no signals"}
+            </span>
+          )}
+          {healthBadge}
+        </div>
         <span className="text-[13px] font-bold font-mono text-text-primary">
           {Math.round(pct * 100)}%
         </span>
@@ -126,6 +151,22 @@ const STRAT_COLORS: Record<string, string> = {
   cash: "#a6a6a0",
 };
 
+const WEIGHT_KEY_TO_SIGNAL_STRATS: Record<string, string[]> = {
+  stat_arb: ["stat_arb"],
+  catalyst: ["catalyst_event"],
+  momentum: ["cross_asset_momentum", "cross_asset"],
+  flow: ["flow_imbalance"],
+  intraday: ["gap_reversion"],
+};
+
+const WEIGHT_KEY_TO_HEALTH_KEY: Record<string, string> = {
+  stat_arb: "stat_arb",
+  catalyst: "catalyst",
+  momentum: "cross_asset",
+  flow: "flow",
+  intraday: "intraday",
+};
+
 const STRAT_META: Record<string, [string, string]> = {
   stat_arb: ["Pair Trading", "Bets on two similar stocks snapping back together"],
   catalyst: ["Insider & Earnings", "Follows insider buying and earnings surprises"],
@@ -142,14 +183,27 @@ export default function MarketOverviewPage() {
   const [regimeAI, setRegimeAI] = useState<RegimeProbsAI["result"] | null>(_cache.regimeAI);
   const [actionBanner, setActionBanner] = useState<MarketActionAI["result"] | null>(_cache.actionBanner);
   const [allocAI, setAllocAI] = useState<Record<string, { name: string; explanation: string }>>(_cache.allocAI);
-  const [recs, setRecs] = useState<SectorRecommendations | null>(_cache.recs);
-  const [entrySignals, setEntrySignals] = useState<Record<string, EntrySignal>>(_cache.entrySignals);
   const [loading, setLoading] = useState(!hasCached);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [recsLoading, setRecsLoading] = useState(false);
-  const [recsError, setRecsError] = useState<string | null>(null);
-  const [recsCacheAge, setRecsCacheAge] = useState<number | null>(_cache.recsCacheAge);
   const [dashboardFetchedAt, setDashboardFetchedAt] = useState<string | null>(_cache.fetchedAt);
+
+  const recsScan = useSSEScan<SectorRecommendations>(
+    "dashboard-recs",
+    "/sectors/stream",
+    "/sectors/recs-status",
+  );
+  const recs = recsScan.result;
+  const recsLoading = recsScan.isLoading;
+  const recsError = recsScan.error;
+
+  const entrySignals: Record<string, EntrySignal> = {};
+  const aiTiming = recsScan.aiSummary as { entries?: Array<{ ticker: string; label: string; detail: string; simple?: string; variant: string }> } | null;
+  if (aiTiming?.entries) {
+    for (const e of aiTiming.entries) {
+      const variant = (["green", "amber", "red"].includes(e.variant) ? e.variant : "gray") as BadgeVariant;
+      entrySignals[e.ticker] = { ticker: e.ticker, label: e.label, detail: e.detail, simple: e.simple, variant, isAI: true };
+    }
+  }
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
@@ -208,89 +262,9 @@ export default function MarketOverviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadRecs = useCallback(async (forceRefresh = false) => {
-    setRecsLoading(true);
-    setRecsError(null);
-    setEntrySignals({});
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 600_000);
-
-      const API_BASE =
-        process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-      const url = `${API_BASE}/sectors/recommendations${forceRefresh ? "?refresh=true" : ""}`;
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
-      });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) {
-        setRecsError(`API returned ${res.status}`);
-        setRecsLoading(false);
-        return;
-      }
-
-      const raw = await res.json();
-      const data: SectorRecommendations = raw;
-      setRecs(data);
-      setRecsCacheAge(raw.cache_age_minutes ?? null);
-      _cache.recs = data;
-      _cache.recsCacheAge = raw.cache_age_minutes ?? null;
-
-      // Ask AI for entry timing on top picks
-      const topPicks = (data.stock_picks ?? []).slice(0, 5);
-      if (topPicks.length > 0) {
-        const currentRegime = regime?.regime ?? "unknown";
-        const timingRes = await apiPost<EntryTimingAI>("/ai/summarize", {
-          type: "entry_timing",
-          data: {
-            regime: currentRegime,
-            picks: topPicks.map((p) => ({
-              ticker: p.ticker,
-              name: p.name,
-              sector: p.sector,
-              price: p.price,
-              entry: p.entry ?? p.price,
-              stop_loss: p.stop_loss ?? 0,
-              target: p.target ?? 0,
-              rsi: p.rsi,
-              why: p.why,
-            })),
-          },
-        });
-
-        if (timingRes?.result?.entries && Array.isArray(timingRes.result.entries)) {
-          const map: Record<string, EntrySignal> = {};
-          for (const e of timingRes.result.entries) {
-            const variant = (["green", "amber", "red"].includes(e.variant)
-              ? e.variant
-              : "gray") as BadgeVariant;
-            map[e.ticker] = {
-              ticker: e.ticker,
-              label: e.label,
-              detail: e.detail,
-              simple: e.simple,
-              variant,
-              isAI: true,
-            };
-          }
-          setEntrySignals(map);
-          _cache.entrySignals = map;
-        } else {
-          console.warn("[EntryTiming] AI returned no entries:", timingRes);
-        }
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        setRecsError("Request timed out. The backend may still be processing.");
-      } else {
-        setRecsError("Failed to load. Is the backend running?");
-      }
-    } finally {
-      setRecsLoading(false);
-    }
-  }, [regime]);
+  const loadRecs = useCallback((forceRefresh = false) => {
+    recsScan.start("/sectors/start-recs", forceRefresh ? { refresh: 1 } : {});
+  }, [recsScan]);
 
   if (loading) {
     return (
@@ -370,7 +344,7 @@ export default function MarketOverviewPage() {
             <button
               onClick={fetchDashboard}
               disabled={loading}
-              className="flex items-center gap-2 px-4 py-2.5 border border-border rounded-xl text-sm font-medium text-text-body hover:bg-card-alt transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-2.5 border border-border rounded-xl text-sm font-medium text-text-body hover:bg-card-alt transition-colors active:scale-[0.98] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {loading && <PulseInline />}
               {loading ? "Refreshing..." : "Refresh"}
@@ -455,15 +429,15 @@ export default function MarketOverviewPage() {
       {/* Collapsible Details */}
       <button
         onClick={() => setDetailsOpen(!detailsOpen)}
-        className="mt-6 w-full flex items-center justify-between px-5 py-3 bg-card border border-border rounded-xl hover:bg-card-alt transition-colors"
+        className="mt-6 w-full flex items-center justify-between px-5 py-3 bg-card border border-border rounded-xl hover:bg-card-alt transition-colors active:scale-[0.99] cursor-pointer"
         style={{ boxShadow: "var(--shadow-card)" }}
       >
         <span className="text-[14px] font-semibold text-text-primary">
           Regime Probabilities & Recommended Allocation
         </span>
-        <span className="text-text-muted text-lg">
-          {detailsOpen ? "▲" : "▼"}
-        </span>
+        <ChevronDown
+          className={`h-4 w-4 text-text-muted transition-transform duration-200 ${detailsOpen ? "rotate-180" : ""}`}
+        />
       </button>
 
       {detailsOpen && (
@@ -591,6 +565,20 @@ export default function MarketOverviewPage() {
                       .replace(/\b\w/g, (c) => c.toUpperCase()),
                     "",
                   ];
+                  const activity = regime?.strategy_activity;
+                  const signalStrats = WEIGHT_KEY_TO_SIGNAL_STRATS[key];
+                  let signalCount: number | undefined;
+                  let isActive: boolean | undefined;
+                  if (activity && signalStrats) {
+                    signalCount = 0;
+                    for (const sk of signalStrats) {
+                      signalCount += activity[sk]?.signal_count ?? 0;
+                    }
+                    isActive = signalCount > 0;
+                  }
+                  const healthKey = WEIGHT_KEY_TO_HEALTH_KEY[key];
+                  const health = healthKey ? regime?.strategy_health?.[healthKey] : undefined;
+
                   return (
                     <AllocationBar
                       key={key}
@@ -598,6 +586,9 @@ export default function MarketOverviewPage() {
                       description={ai?.explanation ?? fallbackDesc}
                       pct={pct}
                       color={STRAT_COLORS[key] ?? "#a6a6a0"}
+                      signalCount={signalCount}
+                      isActive={isActive}
+                      healthStatus={health?.status}
                     />
                   );
                 })}
@@ -644,17 +635,13 @@ export default function MarketOverviewPage() {
           Stock Picks
         </h3>
         <div className="flex items-center gap-2">
-          {recsCacheAge !== null && !recsLoading && (
-            <span className="text-[12px] text-text-muted">
-              {recsCacheAge < 1
-                ? "Just updated"
-                : `Updated ${Math.round(recsCacheAge)}m ago`}
-            </span>
+          {recsScan.resultTimestamp && !recsLoading && (
+            <CacheAge timestamp={recsScan.resultTimestamp} />
           )}
           <button
             onClick={() => loadRecs(false)}
             disabled={recsLoading}
-            className="flex items-center gap-2 px-5 py-2.5 bg-accent text-white rounded-xl text-sm font-semibold hover:bg-accent-light transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-5 py-2.5 bg-accent text-white rounded-xl text-sm font-semibold hover:bg-accent-light transition-colors active:scale-[0.98] cursor-pointer shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {recsLoading && <PulseInline />}
             {recsLoading ? "Analyzing..." : recs ? "Reload Picks" : "Load Stock Picks"}
@@ -662,7 +649,7 @@ export default function MarketOverviewPage() {
           {recs && !recsLoading && (
             <button
               onClick={() => loadRecs(true)}
-              className="px-4 py-2.5 border border-border rounded-xl text-sm font-medium text-text-body hover:bg-card-alt transition-colors"
+              className="px-4 py-2.5 border border-border rounded-xl text-sm font-medium text-text-body hover:bg-card-alt transition-colors active:scale-[0.98] cursor-pointer"
             >
               Force Refresh
             </button>
@@ -678,8 +665,9 @@ export default function MarketOverviewPage() {
         >
           <PulseLoader
             size="lg"
-            label="Analyzing all sectors and picking top stocks..."
-            sublabel="Scanning every S&P 500 sector and evaluating top stocks in each. Usually takes 1-3 minutes."
+            label={`Analyzing sectors... ${recsScan.total > 0 ? Math.round((recsScan.progress / recsScan.total) * 100) : 0}%`}
+            progress={recsScan.total > 0 ? Math.round((recsScan.progress / recsScan.total) * 100) : undefined}
+            sublabel={recsScan.step || "Scanning every S&P 500 sector and evaluating top stocks."}
           />
         </div>
       )}
@@ -694,7 +682,7 @@ export default function MarketOverviewPage() {
           <p className="text-[13px] text-text-muted">{recsError}</p>
           <button
             onClick={() => loadRecs(false)}
-            className="mt-3 px-4 py-2 bg-card border border-border rounded-xl text-sm font-medium text-text-primary hover:bg-card-alt transition-colors"
+            className="mt-3 px-4 py-2 bg-card border border-border rounded-xl text-sm font-medium text-text-primary hover:bg-card-alt transition-colors active:scale-[0.98] cursor-pointer"
           >
             Try Again
           </button>

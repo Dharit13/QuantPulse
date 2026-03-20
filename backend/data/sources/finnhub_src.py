@@ -91,20 +91,26 @@ class FinnhubSource:
                     is_upgrade = action in ("upgrade", "up")
                     is_downgrade = action in ("downgrade", "down")
 
-                    records.append({
-                        "date": grade_date,
-                        "company": item.get("company", ""),
-                        "action": action,
-                        "from_grade": item.get("fromGrade", ""),
-                        "to_grade": to_grade,
-                        "is_upgrade": is_upgrade,
-                        "is_downgrade": is_downgrade,
-                        "strong_buy": 1 if to_grade.lower() in ("strong buy", "outperform") and is_upgrade else 0,
-                        "buy": 1 if to_grade.lower() in ("buy", "overweight") else 0,
-                        "hold": 1 if to_grade.lower() in ("hold", "neutral", "equal-weight", "market perform") else 0,
-                        "sell": 1 if to_grade.lower() in ("sell", "underweight") else 0,
-                        "strong_sell": 1 if to_grade.lower() in ("strong sell", "underperform") and is_downgrade else 0,
-                    })
+                    records.append(
+                        {
+                            "date": grade_date,
+                            "company": item.get("company", ""),
+                            "action": action,
+                            "from_grade": item.get("fromGrade", ""),
+                            "to_grade": to_grade,
+                            "is_upgrade": is_upgrade,
+                            "is_downgrade": is_downgrade,
+                            "strong_buy": 1 if to_grade.lower() in ("strong buy", "outperform") and is_upgrade else 0,
+                            "buy": 1 if to_grade.lower() in ("buy", "overweight") else 0,
+                            "hold": 1
+                            if to_grade.lower() in ("hold", "neutral", "equal-weight", "market perform")
+                            else 0,
+                            "sell": 1 if to_grade.lower() in ("sell", "underweight") else 0,
+                            "strong_sell": 1
+                            if to_grade.lower() in ("strong sell", "underperform") and is_downgrade
+                            else 0,
+                        }
+                    )
 
                 records.sort(key=lambda r: r["date"], reverse=True)
                 logger.info("Finnhub: fetched %d analyst revisions for %s", len(records), ticker)
@@ -143,14 +149,16 @@ class FinnhubSource:
                 except (ValueError, TypeError):
                     continue
 
-                records.append({
-                    "date": period_date,
-                    "strong_buy": item.get("strongBuy", 0),
-                    "buy": item.get("buy", 0),
-                    "hold": item.get("hold", 0),
-                    "sell": item.get("sell", 0),
-                    "strong_sell": item.get("strongSell", 0),
-                })
+                records.append(
+                    {
+                        "date": period_date,
+                        "strong_buy": item.get("strongBuy", 0),
+                        "buy": item.get("buy", 0),
+                        "hold": item.get("hold", 0),
+                        "sell": item.get("sell", 0),
+                        "strong_sell": item.get("strongSell", 0),
+                    }
+                )
 
             records.sort(key=lambda r: r["date"], reverse=True)
             return records[:24]
@@ -193,17 +201,19 @@ class FinnhubSource:
                 except (OSError, ValueError):
                     article_dt = None
 
-                records.append({
-                    "headline": item.get("headline", ""),
-                    "title": item.get("headline", ""),
-                    "summary": item.get("summary", ""),
-                    "source": item.get("source", ""),
-                    "url": item.get("url", ""),
-                    "datetime": article_dt,
-                    "category": item.get("category", ""),
-                    "related": item.get("related", ticker),
-                    "image": item.get("image", ""),
-                })
+                records.append(
+                    {
+                        "headline": item.get("headline", ""),
+                        "title": item.get("headline", ""),
+                        "summary": item.get("summary", ""),
+                        "source": item.get("source", ""),
+                        "url": item.get("url", ""),
+                        "datetime": article_dt,
+                        "category": item.get("category", ""),
+                        "related": item.get("related", ticker),
+                        "image": item.get("image", ""),
+                    }
+                )
 
             records.sort(key=lambda r: r["datetime"] or datetime.min, reverse=True)
             logger.info("Finnhub: fetched %d news articles for %s", len(records), ticker)
@@ -246,19 +256,19 @@ class FinnhubSource:
                     continue
 
                 surprise_pct = item.get("surprisePercent", 0.0) or (
-                    (actual - estimate) / abs(estimate) * 100
-                    if estimate != 0
-                    else 0.0
+                    (actual - estimate) / abs(estimate) * 100 if estimate != 0 else 0.0
                 )
 
-                records.append({
-                    "date": report_date,
-                    "eps_actual": float(actual),
-                    "eps_estimate": float(estimate),
-                    "surprise_pct": round(float(surprise_pct), 2),
-                    "quarter": item.get("quarter"),
-                    "year": item.get("year"),
-                })
+                records.append(
+                    {
+                        "date": report_date,
+                        "eps_actual": float(actual),
+                        "eps_estimate": float(estimate),
+                        "surprise_pct": round(float(surprise_pct), 2),
+                        "quarter": item.get("quarter"),
+                        "year": item.get("year"),
+                    }
+                )
 
             records.sort(key=lambda r: r["date"], reverse=True)
             return records[:12]

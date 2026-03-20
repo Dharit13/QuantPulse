@@ -60,7 +60,7 @@ export function TradeCard({
   return (
     <div
       className={cn(
-        "bg-card border border-border rounded-2xl px-6 py-5 mb-3 transition-all duration-150 hover:shadow-[var(--shadow-card-hover)] hover:border-border-hover",
+        "bg-card border border-border rounded-2xl px-6 py-5 mb-3 transition-all duration-200 hover:translate-y-[-1px] hover:shadow-[var(--shadow-card-hover)] hover:border-border-hover",
         className
       )}
       style={{ boxShadow: "var(--shadow-card)" }}

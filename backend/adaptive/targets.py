@@ -24,33 +24,41 @@ def compute_targets(
     targets = []
 
     target_1_price = entry_price + preferred_target_distance
-    targets.append({
-        "price": round(target_1_price, 2),
-        "label": f"Risk-based ({preferred_rr:.1f}:1 R/R)",
-        "exit_pct": 50,
-    })
+    targets.append(
+        {
+            "price": round(target_1_price, 2),
+            "label": f"Risk-based ({preferred_rr:.1f}:1 R/R)",
+            "exit_pct": 50,
+        }
+    )
 
     if resistance_levels:
         valid = [r for r in resistance_levels if (r - entry_price) > min_target_distance]
         if valid:
-            targets.append({
-                "price": round(valid[0], 2),
-                "label": "Resistance level",
-                "exit_pct": 30,
-            })
+            targets.append(
+                {
+                    "price": round(valid[0], 2),
+                    "label": "Resistance level",
+                    "exit_pct": 30,
+                }
+            )
 
     if analyst_target and (analyst_target - entry_price) > min_target_distance:
-        targets.append({
-            "price": round(analyst_target, 2),
-            "label": "Analyst consensus",
-            "exit_pct": 20,
-        })
+        targets.append(
+            {
+                "price": round(analyst_target, 2),
+                "label": "Analyst consensus",
+                "exit_pct": 20,
+            }
+        )
 
     if len(targets) == 1:
-        targets.append({
-            "price": None,
-            "label": "Trailing stop (2x ATR)",
-            "exit_pct": 50,
-        })
+        targets.append(
+            {
+                "price": None,
+                "label": "Trailing stop (2x ATR)",
+                "exit_pct": 50,
+            }
+        )
 
     return targets

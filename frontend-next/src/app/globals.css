@@ -108,6 +108,53 @@ body {
   animation: qp-bar-pulse 1.6s ease-in-out infinite;
 }
 
+/* Entry animations */
+@keyframes qp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes qp-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-qp-fade-in {
+  animation: qp-fade-in 0.3s ease-out both;
+}
+
+.animate-qp-slide-up {
+  animation: qp-slide-up 0.35s ease-out both;
+}
+
+/* Accessibility: reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus-visible ring */
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -122,3 +169,4 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #b5b5ae;
 }
+

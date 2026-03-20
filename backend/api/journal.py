@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.models.schemas import (

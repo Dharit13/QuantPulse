@@ -8,16 +8,10 @@ Handles the human-in-the-loop workflow:
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
-
-from sqlalchemy.orm import Session
+from datetime import date
 
 from backend.data.fetcher import DataFetcher
-from backend.models.database import (
-    PhantomTradeRecord,
-    SessionLocal,
-    TradeRecord,
-)
+from backend.models.database import get_supabase
 from backend.models.schemas import PhantomTrade, StrategyName, TradeEntry
 
 logger = logging.getLogger(__name__)
@@ -33,32 +27,35 @@ class TradeJournal:
 
     def log_entry(self, entry: TradeEntry) -> int:
         """Record a new trade the user has taken. Returns the trade id."""
-        with SessionLocal() as db:
-            record = TradeRecord(
-                ticker=entry.ticker,
-                direction=entry.direction,
-                strategy=entry.strategy.value,
-                signal_score=entry.signal_score,
-                regime_at_entry=entry.regime_at_entry.value,
-                entry_date=entry.entry_date,
-                entry_price=entry.entry_price,
-                shares=entry.shares,
-                position_size_pct=entry.position_size_pct,
-                stop_loss=entry.stop_loss,
-                target_1=entry.target_1,
-                target_2=entry.target_2,
-                max_hold_days=entry.max_hold_days,
-                atr_at_entry=entry.atr_at_entry,
-                vix_at_entry=entry.vix_at_entry,
-                vol_regime_at_entry=entry.vol_regime_at_entry.value,
-                kelly_fraction_used=entry.kelly_fraction_used,
-                entry_notes=entry.entry_notes,
-            )
-            db.add(record)
-            db.commit()
-            db.refresh(record)
-            logger.info("Trade logged: %s %s %s (id=%d)", entry.direction, entry.ticker, entry.strategy.value, record.id)
-            return record.id
+        sb = get_supabase()
+        row = {
+            "ticker": entry.ticker,
+            "direction": entry.direction,
+            "strategy": entry.strategy.value,
+            "signal_score": entry.signal_score,
+            "regime_at_entry": entry.regime_at_entry.value
+            if hasattr(entry.regime_at_entry, "value")
+            else str(entry.regime_at_entry),
+            "entry_date": str(entry.entry_date),
+            "entry_price": entry.entry_price,
+            "shares": entry.shares,
+            "position_size_pct": entry.position_size_pct,
+            "stop_loss": entry.stop_loss,
+            "target_1": entry.target_1,
+            "target_2": entry.target_2,
+            "max_hold_days": entry.max_hold_days,
+            "atr_at_entry": entry.atr_at_entry,
+            "vix_at_entry": entry.vix_at_entry,
+            "vol_regime_at_entry": entry.vol_regime_at_entry.value
+            if hasattr(entry.vol_regime_at_entry, "value")
+            else str(entry.vol_regime_at_entry),
+            "kelly_fraction_used": entry.kelly_fraction_used,
+            "entry_notes": entry.entry_notes,
+        }
+        result = sb.table("trades").insert(row).execute()
+        record_id = result.data[0]["id"]
+        logger.info("Trade logged: %s %s %s (id=%d)", entry.direction, entry.ticker, entry.strategy.value, record_id)
+        return record_id
 
     def log_exit(
         self,
@@ -69,61 +66,70 @@ class TradeJournal:
         exit_notes: str = "",
     ) -> TradeEntry | None:
         """Close an active trade with exit details and compute P&L."""
-        with SessionLocal() as db:
-            record = db.query(TradeRecord).filter(TradeRecord.id == trade_id).first()
-            if record is None:
-                logger.warning("Trade id=%d not found", trade_id)
-                return None
+        sb = get_supabase()
+        result = sb.table("trades").select("*").eq("id", trade_id).execute()
+        if not result.data:
+            logger.warning("Trade id=%d not found", trade_id)
+            return None
 
-            record.exit_date = exit_date
-            record.exit_price = exit_price
-            record.exit_reason = exit_reason
-            record.exit_notes = exit_notes
-            record.hold_days = (exit_date - record.entry_date).days
+        record = result.data[0]
+        entry_date_val = (
+            date.fromisoformat(record["entry_date"]) if isinstance(record["entry_date"], str) else record["entry_date"]
+        )
+        hold_days = (exit_date - entry_date_val).days
 
-            multiplier = 1.0 if record.direction == "long" else -1.0
-            record.pnl_dollars = round(multiplier * (exit_price - record.entry_price) * record.shares, 2)
-            record.pnl_percent = round(multiplier * (exit_price - record.entry_price) / record.entry_price * 100, 4)
+        multiplier = 1.0 if record["direction"] == "long" else -1.0
+        pnl_dollars = round(multiplier * (exit_price - record["entry_price"]) * record["shares"], 2)
+        pnl_percent = round(multiplier * (exit_price - record["entry_price"]) / record["entry_price"] * 100, 4)
 
-            db.commit()
-            logger.info(
-                "Trade closed: id=%d %s P&L=$%.2f (%.2f%%)",
-                trade_id, record.ticker, record.pnl_dollars, record.pnl_percent,
-            )
-            return self._record_to_entry(record)
+        sb.table("trades").update(
+            {
+                "exit_date": str(exit_date),
+                "exit_price": exit_price,
+                "exit_reason": exit_reason,
+                "exit_notes": exit_notes,
+                "hold_days": hold_days,
+                "pnl_dollars": pnl_dollars,
+                "pnl_percent": pnl_percent,
+            }
+        ).eq("id", trade_id).execute()
+
+        logger.info("Trade closed: id=%d %s P&L=$%.2f (%.2f%%)", trade_id, record["ticker"], pnl_dollars, pnl_percent)
+
+        updated = sb.table("trades").select("*").eq("id", trade_id).execute()
+        return self._record_to_entry(updated.data[0]) if updated.data else None
 
     def log_phantom(self, phantom: PhantomTrade) -> int:
         """Record a signal the user passed on for what-if tracking."""
-        with SessionLocal() as db:
-            record = PhantomTradeRecord(
-                ticker=phantom.ticker,
-                direction=phantom.direction,
-                strategy=phantom.strategy.value,
-                signal_score=phantom.signal_score,
-                signal_date=phantom.signal_date,
-                entry_price_suggested=phantom.entry_price_suggested,
-                stop_suggested=phantom.stop_suggested,
-                target_suggested=phantom.target_suggested,
-                pass_reason=phantom.pass_reason,
-                regime=phantom.regime,
-                vix_at_signal=phantom.vix_at_signal,
-                atr_at_signal=phantom.atr_at_signal,
-                conviction=phantom.conviction,
-                signal_id=phantom.signal_id,
-            )
-            db.add(record)
-            db.commit()
-            db.refresh(record)
-            logger.info("Phantom trade logged: %s %s (id=%d)", phantom.ticker, phantom.strategy.value, record.id)
-            return record.id
+        sb = get_supabase()
+        row = {
+            "ticker": phantom.ticker,
+            "direction": phantom.direction,
+            "strategy": phantom.strategy.value,
+            "signal_score": phantom.signal_score,
+            "signal_date": str(phantom.signal_date),
+            "entry_price_suggested": phantom.entry_price_suggested,
+            "stop_suggested": phantom.stop_suggested,
+            "target_suggested": phantom.target_suggested,
+            "pass_reason": phantom.pass_reason,
+            "regime": phantom.regime,
+            "vix_at_signal": phantom.vix_at_signal,
+            "atr_at_signal": phantom.atr_at_signal,
+            "conviction": phantom.conviction,
+            "signal_id": phantom.signal_id,
+        }
+        result = sb.table("phantom_trades").insert(row).execute()
+        record_id = result.data[0]["id"]
+        logger.info("Phantom trade logged: %s %s (id=%d)", phantom.ticker, phantom.strategy.value, record_id)
+        return record_id
 
     # ── Read Operations ─────────────────────────────────────────
 
     def get_active_trades(self) -> list[TradeEntry]:
         """All trades that have not been exited yet."""
-        with SessionLocal() as db:
-            rows = db.query(TradeRecord).filter(TradeRecord.exit_date.is_(None)).all()
-            return [self._record_to_entry(r) for r in rows]
+        sb = get_supabase()
+        result = sb.table("trades").select("*").is_("exit_date", "null").execute()
+        return [self._record_to_entry(r) for r in result.data]
 
     def get_closed_trades(
         self,
@@ -131,31 +137,33 @@ class TradeJournal:
         since: date | None = None,
     ) -> list[TradeEntry]:
         """Closed trades with optional strategy/date filters."""
-        with SessionLocal() as db:
-            q = db.query(TradeRecord).filter(TradeRecord.exit_date.isnot(None))
-            if strategy:
-                q = q.filter(TradeRecord.strategy == strategy.value)
-            if since:
-                q = q.filter(TradeRecord.exit_date >= since)
-            return [self._record_to_entry(r) for r in q.order_by(TradeRecord.exit_date.desc()).all()]
+        sb = get_supabase()
+        q = sb.table("trades").select("*").not_.is_("exit_date", "null")
+        if strategy:
+            q = q.eq("strategy", strategy.value)
+        if since:
+            q = q.gte("exit_date", str(since))
+        result = q.order("exit_date", desc=True).execute()
+        return [self._record_to_entry(r) for r in result.data]
 
     def get_trade(self, trade_id: int) -> TradeEntry | None:
-        with SessionLocal() as db:
-            record = db.query(TradeRecord).filter(TradeRecord.id == trade_id).first()
-            return self._record_to_entry(record) if record else None
+        sb = get_supabase()
+        result = sb.table("trades").select("*").eq("id", trade_id).execute()
+        return self._record_to_entry(result.data[0]) if result.data else None
 
     def get_phantom_trades(
         self,
         strategy: StrategyName | None = None,
         since: date | None = None,
     ) -> list[PhantomTrade]:
-        with SessionLocal() as db:
-            q = db.query(PhantomTradeRecord)
-            if strategy:
-                q = q.filter(PhantomTradeRecord.strategy == strategy.value)
-            if since:
-                q = q.filter(PhantomTradeRecord.signal_date >= since)
-            return [self._phantom_to_model(r) for r in q.order_by(PhantomTradeRecord.signal_date.desc()).all()]
+        sb = get_supabase()
+        q = sb.table("phantom_trades").select("*")
+        if strategy:
+            q = q.eq("strategy", strategy.value)
+        if since:
+            q = q.gte("signal_date", str(since))
+        result = q.order("signal_date", desc=True).execute()
+        return [self._phantom_to_model(r) for r in result.data]
 
     # ── Monitoring ──────────────────────────────────────────────
 
@@ -176,60 +184,90 @@ class TradeJournal:
 
             if trade.direction == "long":
                 if current_price <= trade.stop_loss:
-                    alerts.append({"trade_id": trade.id, "ticker": trade.ticker, "type": "stop_hit", "price": current_price})
+                    alerts.append(
+                        {"trade_id": trade.id, "ticker": trade.ticker, "type": "stop_hit", "price": current_price}
+                    )
                 elif current_price >= trade.target_1:
-                    alerts.append({"trade_id": trade.id, "ticker": trade.ticker, "type": "target_hit", "price": current_price})
+                    alerts.append(
+                        {"trade_id": trade.id, "ticker": trade.ticker, "type": "target_hit", "price": current_price}
+                    )
                 elif trade.stop_loss > 0 and current_price <= trade.stop_loss * 1.01:
-                    alerts.append({"trade_id": trade.id, "ticker": trade.ticker, "type": "approaching_stop", "price": current_price})
+                    alerts.append(
+                        {
+                            "trade_id": trade.id,
+                            "ticker": trade.ticker,
+                            "type": "approaching_stop",
+                            "price": current_price,
+                        }
+                    )
             else:
                 if current_price >= trade.stop_loss:
-                    alerts.append({"trade_id": trade.id, "ticker": trade.ticker, "type": "stop_hit", "price": current_price})
+                    alerts.append(
+                        {"trade_id": trade.id, "ticker": trade.ticker, "type": "stop_hit", "price": current_price}
+                    )
                 elif current_price <= trade.target_1:
-                    alerts.append({"trade_id": trade.id, "ticker": trade.ticker, "type": "target_hit", "price": current_price})
+                    alerts.append(
+                        {"trade_id": trade.id, "ticker": trade.ticker, "type": "target_hit", "price": current_price}
+                    )
                 elif trade.stop_loss > 0 and current_price >= trade.stop_loss * 0.99:
-                    alerts.append({"trade_id": trade.id, "ticker": trade.ticker, "type": "approaching_stop", "price": current_price})
+                    alerts.append(
+                        {
+                            "trade_id": trade.id,
+                            "ticker": trade.ticker,
+                            "type": "approaching_stop",
+                            "price": current_price,
+                        }
+                    )
 
             if hold_days >= trade.max_hold_days:
-                alerts.append({"trade_id": trade.id, "ticker": trade.ticker, "type": "time_stop", "hold_days": hold_days})
+                alerts.append(
+                    {"trade_id": trade.id, "ticker": trade.ticker, "type": "time_stop", "hold_days": hold_days}
+                )
 
         return alerts
 
     def update_phantom_outcomes(self) -> int:
         """Re-evaluate open phantoms against current prices. Returns count updated."""
+        sb = get_supabase()
+        result = sb.table("phantom_trades").select("*").is_("phantom_exit_date", "null").execute()
         updated = 0
-        with SessionLocal() as db:
-            phantoms = db.query(PhantomTradeRecord).filter(
-                PhantomTradeRecord.phantom_exit_date.is_(None),
-            ).all()
-            for p in phantoms:
-                days_since = (date.today() - p.signal_date).days
-                if days_since < 1:
+
+        for p in result.data:
+            signal_date_val = (
+                date.fromisoformat(p["signal_date"]) if isinstance(p["signal_date"], str) else p["signal_date"]
+            )
+            days_since = (date.today() - signal_date_val).days
+            if days_since < 1:
+                continue
+            try:
+                df = self._fetcher.get_daily_ohlcv(p["ticker"], period="3mo")
+                if df.empty:
                     continue
-                try:
-                    df = self._fetcher.get_daily_ohlcv(p.ticker, period="3mo")
-                    if df.empty:
-                        continue
-                    current_price = float(df["Close"].iloc[-1])
-                except Exception:
-                    continue
+                current_price = float(df["Close"].iloc[-1])
+            except Exception:
+                continue
 
-                hit_stop = (p.direction == "long" and current_price <= p.stop_suggested) or \
-                           (p.direction == "short" and current_price >= p.stop_suggested)
-                hit_target = (p.direction == "long" and current_price >= p.target_suggested) or \
-                             (p.direction == "short" and current_price <= p.target_suggested)
+            hit_stop = (p["direction"] == "long" and current_price <= p["stop_suggested"]) or (
+                p["direction"] == "short" and current_price >= p["stop_suggested"]
+            )
+            hit_target = (p["direction"] == "long" and current_price >= p["target_suggested"]) or (
+                p["direction"] == "short" and current_price <= p["target_suggested"]
+            )
 
-                if hit_stop or hit_target or days_since > 30:
-                    exit_price = current_price
-                    mult = 1.0 if p.direction == "long" else -1.0
-                    pnl_pct = mult * (exit_price - p.entry_price_suggested) / p.entry_price_suggested * 100
+            if hit_stop or hit_target or days_since > 30:
+                mult = 1.0 if p["direction"] == "long" else -1.0
+                pnl_pct = mult * (current_price - p["entry_price_suggested"]) / p["entry_price_suggested"] * 100
 
-                    p.phantom_exit_date = date.today()
-                    p.phantom_exit_price = exit_price
-                    p.phantom_pnl_pct = round(pnl_pct, 4)
-                    p.phantom_outcome = "would_have_won" if pnl_pct > 0 else "would_have_lost"
-                    updated += 1
+                sb.table("phantom_trades").update(
+                    {
+                        "phantom_exit_date": str(date.today()),
+                        "phantom_exit_price": current_price,
+                        "phantom_pnl_pct": round(pnl_pct, 4),
+                        "phantom_outcome": "would_have_won" if pnl_pct > 0 else "would_have_lost",
+                    }
+                ).eq("id", p["id"]).execute()
+                updated += 1
 
-            db.commit()
         logger.info("Updated %d phantom trade outcomes", updated)
         return updated
 
@@ -261,51 +299,51 @@ class TradeJournal:
     # ── Internal ────────────────────────────────────────────────
 
     @staticmethod
-    def _record_to_entry(r: TradeRecord) -> TradeEntry:
+    def _record_to_entry(r: dict) -> TradeEntry:
         return TradeEntry(
-            id=r.id,
-            ticker=r.ticker,
-            direction=r.direction,
-            strategy=StrategyName(r.strategy),
-            signal_score=r.signal_score,
-            regime_at_entry=r.regime_at_entry,
-            entry_date=r.entry_date,
-            entry_price=r.entry_price,
-            shares=r.shares,
-            position_size_pct=r.position_size_pct,
-            stop_loss=r.stop_loss,
-            target_1=r.target_1,
-            target_2=r.target_2,
-            max_hold_days=r.max_hold_days,
-            atr_at_entry=r.atr_at_entry,
-            vix_at_entry=r.vix_at_entry,
-            vol_regime_at_entry=r.vol_regime_at_entry,
-            kelly_fraction_used=r.kelly_fraction_used,
-            exit_date=r.exit_date,
-            exit_price=r.exit_price,
-            exit_reason=r.exit_reason,
-            pnl_dollars=r.pnl_dollars,
-            pnl_percent=r.pnl_percent,
-            hold_days=r.hold_days,
-            entry_notes=r.entry_notes or "",
-            exit_notes=r.exit_notes or "",
+            id=r["id"],
+            ticker=r["ticker"],
+            direction=r["direction"],
+            strategy=StrategyName(r["strategy"]),
+            signal_score=r["signal_score"],
+            regime_at_entry=r["regime_at_entry"],
+            entry_date=r["entry_date"],
+            entry_price=r["entry_price"],
+            shares=r["shares"],
+            position_size_pct=r["position_size_pct"],
+            stop_loss=r["stop_loss"],
+            target_1=r["target_1"],
+            target_2=r.get("target_2"),
+            max_hold_days=r["max_hold_days"],
+            atr_at_entry=r["atr_at_entry"],
+            vix_at_entry=r["vix_at_entry"],
+            vol_regime_at_entry=r["vol_regime_at_entry"],
+            kelly_fraction_used=r["kelly_fraction_used"],
+            exit_date=r.get("exit_date"),
+            exit_price=r.get("exit_price"),
+            exit_reason=r.get("exit_reason"),
+            pnl_dollars=r.get("pnl_dollars"),
+            pnl_percent=r.get("pnl_percent"),
+            hold_days=r.get("hold_days"),
+            entry_notes=r.get("entry_notes", ""),
+            exit_notes=r.get("exit_notes", ""),
         )
 
     @staticmethod
-    def _phantom_to_model(r: PhantomTradeRecord) -> PhantomTrade:
+    def _phantom_to_model(r: dict) -> PhantomTrade:
         return PhantomTrade(
-            id=r.id,
-            ticker=r.ticker,
-            direction=r.direction,
-            strategy=StrategyName(r.strategy),
-            signal_score=r.signal_score,
-            signal_date=r.signal_date,
-            entry_price_suggested=r.entry_price_suggested,
-            stop_suggested=r.stop_suggested,
-            target_suggested=r.target_suggested,
-            pass_reason=r.pass_reason or "",
-            phantom_exit_date=r.phantom_exit_date,
-            phantom_exit_price=r.phantom_exit_price,
-            phantom_pnl_pct=r.phantom_pnl_pct,
-            phantom_outcome=r.phantom_outcome,
+            id=r["id"],
+            ticker=r["ticker"],
+            direction=r["direction"],
+            strategy=StrategyName(r["strategy"]),
+            signal_score=r["signal_score"],
+            signal_date=r["signal_date"],
+            entry_price_suggested=r["entry_price_suggested"],
+            stop_suggested=r["stop_suggested"],
+            target_suggested=r["target_suggested"],
+            pass_reason=r.get("pass_reason", ""),
+            phantom_exit_date=r.get("phantom_exit_date"),
+            phantom_exit_price=r.get("phantom_exit_price"),
+            phantom_pnl_pct=r.get("phantom_pnl_pct"),
+            phantom_outcome=r.get("phantom_outcome"),
         )

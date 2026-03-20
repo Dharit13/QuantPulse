@@ -1,6 +1,6 @@
 """QuantPulse v2 — FastAPI application.
 
-Mounts the API router, initializes the database, and configures
+Mounts the API router, initializes the Supabase client, and configures
 the APScheduler for all recurring calibration and monitoring jobs.
 """
 
@@ -11,7 +11,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.router import api_router
-from backend.models.database import init_db
 from backend.scheduler import register_all_jobs
 
 scheduler = BackgroundScheduler()
@@ -19,26 +18,38 @@ scheduler = BackgroundScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
     from backend.data.cache import data_cache
+
     cleared = data_cache.clear_expired()
     if cleared:
         import logging
+
         logging.getLogger(__name__).info("Startup: cleared %d expired cache entries", cleared)
     register_all_jobs(scheduler)
     scheduler.start()
 
     import threading
+
     def _warmup():
         import logging
+
         log = logging.getLogger(__name__)
-        log.info("Startup: warming pipeline cache in background...")
+        log.info("Startup: populating data tables + warming pipeline cache...")
+        try:
+            from backend.data.refresh_scheduler import initial_data_load
+
+            initial_data_load()
+            log.info("Startup: data tables populated")
+        except Exception as e:
+            log.warning("Startup: initial data load failed: %s", e)
         try:
             from backend.pipeline import refresh_all
+
             refresh_all()
             log.info("Startup: pipeline cache warm")
         except Exception as e:
             log.warning("Startup: pipeline warmup failed: %s", e)
+
     threading.Thread(target=_warmup, daemon=True).start()
 
     yield

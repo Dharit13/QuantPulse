@@ -1,19 +1,18 @@
 "use client";
 
 import { PulseLoader, PulseInline } from "@/components/pulse-loader";
-import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { AICard } from "@/components/ai-card";
 import { TradeCard } from "@/components/trade-card";
-import { Badge } from "@/components/badge";
-import { useScannerScan } from "@/context/scan-context";
 import { CacheAge } from "@/components/cache-age";
-import { apiPost } from "@/lib/api";
+import { useSSEScan } from "@/hooks/use-sse-scan";
 import { formatDollar } from "@/lib/utils";
-import type { AIResult, BadgeVariant } from "@/lib/types";
+import type { BadgeVariant } from "@/lib/types";
 
 interface ScanResult {
   regime?: string;
+  total_signals?: number;
+  timestamp?: string;
   signals: Array<{
     signal?: {
       ticker: string;
@@ -25,6 +24,15 @@ interface ScanResult {
       stop_loss: number;
       target: number;
       edge_reason: string;
+      max_hold_days?: number;
+      kelly_size_pct?: number;
+    };
+    final_recommendation?: string;
+    shadow_evidence?: {
+      win_rate?: number;
+      phantom_count?: number;
+      avg_pnl_pct?: number;
+      has_enough_data?: boolean;
     };
     ticker?: string;
     direction?: string;
@@ -35,6 +43,7 @@ interface ScanResult {
     stop_loss?: number;
     target?: number;
     edge_reason?: string;
+    max_hold_days?: number;
   }>;
 }
 
@@ -50,20 +59,20 @@ function normalizeSignal(raw: ScanResult["signals"][number]) {
     stop: s.stop_loss ?? 0,
     target: s.target ?? 0,
     edge: s.edge_reason ?? "",
+    maxHoldDays: s.max_hold_days ?? 0,
+    recommendation: raw.final_recommendation ?? "",
+    winRate: raw.shadow_evidence?.win_rate,
+    shadowCount: raw.shadow_evidence?.phantom_count ?? 0,
+    shadowHasData: raw.shadow_evidence?.has_enough_data ?? false,
   };
 }
 
-interface SignalExplainAI {
-  result: {
-    explanations: Array<{ ticker: string; simple: string }>;
-  } | null;
-}
-
 export default function ScannerPage() {
-  const scan = useScannerScan<ScanResult>();
-  const [aiResult, setAiResult] = useState<AIResult["result"] | null>(null);
-  const [simpleMap, setSimpleMap] = useState<Record<string, string>>({});
-  const [aiLoading, setAiLoading] = useState(false);
+  const scan = useSSEScan<ScanResult>(
+    "scanner",
+    "/scan/stream",
+    "/scan/status",
+  );
 
   const signals = scan.result?.signals ?? [];
   const normalized = signals
@@ -71,43 +80,13 @@ export default function ScannerPage() {
     .sort((a, b) => b.conviction - a.conviction || b.score - a.score)
     .slice(0, 10);
 
-  useEffect(() => {
-    if (scan.status !== "done" || !scan.result) return;
-    setAiLoading(true);
-
-    const sigs = signals.slice(0, 10).map((raw) => {
-      const s = raw.signal ?? raw;
-      return {
-        ticker: s.ticker,
-        direction: s.direction,
-        strategy: s.strategy,
-        signal_score: s.signal_score,
-        edge_reason: s.edge_reason,
-      };
-    });
-
-    Promise.all([
-      apiPost<AIResult>("/ai/summarize", {
-        type: "scan",
-        data: { regime: scan.result.regime ?? "unknown", signals: sigs },
-      }),
-      apiPost<SignalExplainAI>("/ai/summarize", {
-        type: "signal_explain",
-        data: { signals: sigs },
-      }),
-    ]).then(([summaryRes, explainRes]) => {
-      setAiResult(summaryRes?.result ?? null);
-      if (explainRes?.result?.explanations) {
-        const map: Record<string, string> = {};
-        for (const e of explainRes.result.explanations) {
-          map[e.ticker] = e.simple;
-        }
-        setSimpleMap(map);
-      }
-      setAiLoading(false);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scan.status]);
+  const aiResult = scan.aiSummary;
+  const simpleMap: Record<string, string> = {};
+  if (scan.signalExplanations?.explanations) {
+    for (const e of scan.signalExplanations.explanations) {
+      simpleMap[e.ticker] = e.simple;
+    }
+  }
 
   const pct =
     scan.total > 0 ? Math.round((scan.progress / scan.total) * 100) : 0;
@@ -192,13 +171,6 @@ export default function ScannerPage() {
       {scan.status === "done" && normalized.length > 0 && (
         <>
           {/* AI Analysis */}
-          {aiLoading && (
-            <div className="flex items-center gap-2 text-text-muted text-sm mb-4">
-              <PulseInline />
-              AI analyzing signals...
-            </div>
-          )}
-
           {aiResult && (
             <AICard title="Scan Analysis" accentColor="#539616">
               {aiResult.scan_summary_simple && (
@@ -241,26 +213,64 @@ export default function ScannerPage() {
             const lossPct = s.entry > 0 ? ((s.entry - s.stop) / s.entry * 100).toFixed(0) : "?";
             const simple = simpleMap[s.ticker];
 
+            const scoreVariant: BadgeVariant =
+              s.score >= 70 ? "green" : s.score >= 50 ? "amber" : "red";
+
+            const recVariant: BadgeVariant =
+              s.recommendation === "trade"
+                ? "green"
+                : s.recommendation === "conditional_trade"
+                  ? "amber"
+                  : s.recommendation === "do_not_trade"
+                    ? "red"
+                    : "gray";
+            const recLabel =
+              s.recommendation === "trade"
+                ? "Trade"
+                : s.recommendation === "conditional_trade"
+                  ? "Conditional"
+                  : s.recommendation === "do_not_trade"
+                    ? "Do Not Trade"
+                    : "";
+
+            const badges: Array<{ text: string; variant: BadgeVariant }> = [
+              { text: dirLabel, variant: dirBadge },
+              { text: s.strategy, variant: "blue" },
+              { text: `Score ${s.score.toFixed(0)}`, variant: scoreVariant },
+            ];
+            if (recLabel) {
+              badges.push({ text: recLabel, variant: recVariant });
+            }
+
+            const stats = [
+              { label: "Entry", value: formatDollar(s.entry) },
+              { label: "Stop", value: formatDollar(s.stop), color: "#d44040" },
+              { label: "Target", value: formatDollar(s.target), color: "#2d9d3a" },
+              { label: "R/R", value: rr },
+            ];
+            if (s.maxHoldDays > 0) {
+              stats.push({ label: "Hold", value: `${s.maxHoldDays}d` });
+            }
+            if (s.shadowHasData && s.winRate !== undefined) {
+              stats.push({
+                label: "Win Rate",
+                value: `${(s.winRate * 100).toFixed(0)}%`,
+                color: s.winRate >= 0.5 ? "#2d9d3a" : "#d44040",
+              });
+            }
+
             return (
               <TradeCard
                 key={`${s.ticker}-${i}`}
                 ticker={s.ticker}
                 rank={i + 1}
                 price={s.entry}
-                badges={[
-                  { text: dirLabel, variant: dirBadge },
-                  { text: s.strategy, variant: "blue" },
-                ]}
-                stats={[
-                  { label: "Entry", value: formatDollar(s.entry) },
-                  { label: "Stop", value: formatDollar(s.stop), color: "#d44040" },
-                  { label: "Target", value: formatDollar(s.target), color: "#2d9d3a" },
-                  { label: "Reward/Risk", value: rr },
-                ]}
+                badges={badges}
+                stats={stats}
                 entrySignal={simple ? {
                   ticker: s.ticker,
                   label: i === 0 ? "Top Pick" : `#${i + 1} Pick`,
-                  detail: `Could gain +${gainPct}% · Could lose -${lossPct}%`,
+                  detail: `Could gain +${gainPct}% · Could lose -${lossPct}%${s.shadowHasData && s.winRate !== undefined ? ` · ${(s.winRate * 100).toFixed(0)}% win rate from ${s.shadowCount} similar trades` : ""}`,
                   simple,
                   variant: i === 0 ? "green" : i < 3 ? "blue" : "gray",
                   isAI: true,
@@ -269,6 +279,16 @@ export default function ScannerPage() {
               />
             );
           })}
+
+          {/* Scan stats */}
+          {scan.result && (
+            <p className="text-[12px] text-text-muted mt-4">
+              {scan.result.total_signals
+                ? `Found ${scan.result.total_signals} total signals, showing top ${normalized.length}.`
+                : `Showing top ${normalized.length} signals.`}
+              {" "}These are long-term (6-12 month) investment opportunities.
+            </p>
+          )}
         </>
       )}
 

@@ -7,8 +7,12 @@ from backend.data.cache import data_cache
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 PIPELINE_KEYS = [
-    "pipeline:regime", "pipeline:scanner", "pipeline:sectors",
-    "pipeline:portfolio", "pipeline:swing", "pipeline:flow",
+    "pipeline:regime",
+    "pipeline:scanner",
+    "pipeline:sectors",
+    "pipeline:portfolio",
+    "pipeline:swing",
+    "pipeline:flow",
     "pipeline:earnings_calendar",
 ]
 
@@ -52,6 +56,7 @@ async def get_flow_summary(
             return cached
 
     from backend.pipeline import refresh_flow
+
     result = refresh_flow()
     return result or {"data": None, "refreshed_at": None, "error": "SteadyAPI disabled or unavailable"}
 
@@ -67,5 +72,6 @@ async def get_earnings_calendar(
             return cached
 
     from backend.pipeline import refresh_earnings_calendar
+
     result = refresh_earnings_calendar()
     return result or {"data": [], "refreshed_at": None, "error": "FMP unavailable"}

@@ -61,9 +61,9 @@ def get_position_size(
 
 # Pre-computed defaults for when no trailing trade data exists
 DEFAULT_KELLY_PARAMS = {
-    "stat_arb":      {"win_rate": 0.65, "win_loss_ratio": 1.2},
-    "catalyst":      {"win_rate": 0.58, "win_loss_ratio": 1.8},
-    "cross_asset":   {"win_rate": 0.52, "win_loss_ratio": 2.0},
-    "flow":          {"win_rate": 0.55, "win_loss_ratio": 2.0},
+    "stat_arb": {"win_rate": 0.65, "win_loss_ratio": 1.2},
+    "catalyst": {"win_rate": 0.58, "win_loss_ratio": 1.8},
+    "cross_asset": {"win_rate": 0.52, "win_loss_ratio": 2.0},
+    "flow": {"win_rate": 0.55, "win_loss_ratio": 2.0},
     "gap_reversion": {"win_rate": 0.62, "win_loss_ratio": 1.3},
 }

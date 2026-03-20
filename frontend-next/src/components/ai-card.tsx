@@ -16,7 +16,7 @@ export function AICard({
   return (
     <div
       className={cn(
-        "bg-card border border-border rounded-2xl px-6 py-5 mb-3",
+        "bg-card border border-border rounded-2xl px-6 py-5 mb-3 transition-all duration-200 hover:shadow-[var(--shadow-card-hover)]",
         className
       )}
       style={{

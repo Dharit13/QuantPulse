@@ -14,7 +14,7 @@ from datetime import date, timedelta
 import numpy as np
 
 from backend.adaptive.weight_interpolation import STRATEGY_WEIGHTS
-from backend.models.database import PhantomTradeRecord, SessionLocal
+from backend.models.database import get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -42,18 +42,18 @@ def compute_strategy_health(
     lookback_days: int = 60,
 ) -> StrategyHealth:
     """Assess whether a strategy is healthy, degraded, or should be paused."""
-    cutoff = date.today() - timedelta(days=lookback_days)
+    cutoff = str(date.today() - timedelta(days=lookback_days))
 
-    with SessionLocal() as db:
-        phantoms = (
-            db.query(PhantomTradeRecord)
-            .filter(
-                PhantomTradeRecord.strategy == strategy,
-                PhantomTradeRecord.signal_date >= cutoff,
-                PhantomTradeRecord.phantom_outcome.isnot(None),
-            )
-            .all()
-        )
+    sb = get_supabase()
+    result = (
+        sb.table("phantom_trades")
+        .select("*")
+        .eq("strategy", strategy)
+        .gte("signal_date", cutoff)
+        .not_.is_("phantom_outcome", "null")
+        .execute()
+    )
+    phantoms = result.data
 
     if len(phantoms) < MIN_PHANTOMS_FOR_HEALTH:
         return StrategyHealth(
@@ -68,8 +68,8 @@ def compute_strategy_health(
             size_adjustment=0.8,
         )
 
-    pnl_values = [p.phantom_pnl_pct for p in phantoms if p.phantom_pnl_pct is not None]
-    wins = [p for p in phantoms if p.phantom_outcome == "would_have_won"]
+    pnl_values = [p["phantom_pnl_pct"] for p in phantoms if p.get("phantom_pnl_pct") is not None]
+    wins = [p for p in phantoms if p.get("phantom_outcome") == "would_have_won"]
 
     win_rate = len(wins) / len(phantoms)
 
@@ -78,7 +78,6 @@ def compute_strategy_health(
     std_pnl = float(arr.std()) if len(arr) > 1 else 1.0
     sharpe = float(mean_pnl / std_pnl * np.sqrt(252)) if std_pnl > 0 else 0.0
 
-    # Determine status and size adjustment
     if sharpe < SHARPE_PAUSED:
         status = "paused"
         size_adj = 0.0
@@ -93,7 +92,6 @@ def compute_strategy_health(
     if alignment == "unfavorable":
         size_adj *= 0.7
 
-    # Slippage deterioration: compare first half vs second half of phantom PnLs
     slippage_deteriorating = False
     if len(pnl_values) >= 10:
         mid = len(pnl_values) // 2

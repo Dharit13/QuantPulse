@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # ── Feature Flags ──
     enable_polygon: bool = False
     enable_smart_money: bool = False
-    enable_steadyapi: bool = False
+    enable_steadyapi: bool = True
     enable_quiver: bool = False
     enable_intraday: bool = False
     paper_trade_mode: bool = True
@@ -26,10 +26,10 @@ class Settings(BaseSettings):
     # ── Strategy Enable/Disable ──
     enable_stat_arb: bool = True
     enable_catalyst: bool = True
-    enable_cross_asset: bool = False
-    cross_asset_overlay_only: bool = True
-    enable_flow: bool = False
-    enable_gap_reversion: bool = False
+    enable_cross_asset: bool = True
+    cross_asset_overlay_only: bool = False
+    enable_flow: bool = True
+    enable_gap_reversion: bool = True
 
     # ── Risk Parameters ──
     initial_capital: float = 100_000.0
@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     max_gross_exposure: float = 2.0
     max_drawdown_pct: float = 0.15
     tail_hedge_pct: float = 0.03
+
+    # ── Portfolio Waterfall ──
+    portfolio_sentiment_min_score: float = 70.0
+    portfolio_max_sentiment_candidates: int = 5
+    portfolio_max_per_sector: int = 2
+    portfolio_min_candidates: int = 3
+    portfolio_max_picks: int = 5
+    portfolio_bluechip_tickers: str = "AAPL,MSFT,GOOGL,AMZN,NVDA,META,BRK-B,JPM,UNH,V"
 
     # ── Position Sizing ──
     # "quarter_kelly" (conservative default), "half_kelly", "equal_risk"
@@ -46,8 +54,9 @@ class Settings(BaseSettings):
     # ── Execution Mode ──
     execution_mode: str = "advisory"
 
-    # ── Database (Supabase PostgreSQL) ──
-    database_url: str = ""
+    # ── Database (Supabase) ──
+    supabase_url: str = ""
+    supabase_key: str = ""
 
     # ── Alert Delivery ──
     ntfy_topic: str = "quantpulse-alerts"

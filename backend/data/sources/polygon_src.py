@@ -11,7 +11,7 @@ Docs: https://polygon.io/docs
 """
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import httpx
 import pandas as pd
@@ -103,13 +103,15 @@ class PolygonSource:
             df = pd.DataFrame(results)
             df["date"] = pd.to_datetime(df["t"], unit="ms")
             df = df.set_index("date")
-            df = df.rename(columns={
-                "o": "Open",
-                "h": "High",
-                "l": "Low",
-                "c": "Close",
-                "v": "Volume",
-            })
+            df = df.rename(
+                columns={
+                    "o": "Open",
+                    "h": "High",
+                    "l": "Low",
+                    "c": "Close",
+                    "v": "Volume",
+                }
+            )
             return df[["Open", "High", "Low", "Close", "Volume"]]
         except httpx.HTTPStatusError as exc:
             logger.error("Polygon OHLCV HTTP error for %s: %s", ticker, exc)
@@ -148,15 +150,17 @@ class PolygonSource:
             df = pd.DataFrame(results)
             df["datetime"] = pd.to_datetime(df["t"], unit="ms")
             df = df.set_index("datetime")
-            df = df.rename(columns={
-                "o": "Open",
-                "h": "High",
-                "l": "Low",
-                "c": "Close",
-                "v": "Volume",
-                "vw": "VWAP",
-                "n": "Transactions",
-            })
+            df = df.rename(
+                columns={
+                    "o": "Open",
+                    "h": "High",
+                    "l": "Low",
+                    "c": "Close",
+                    "v": "Volume",
+                    "vw": "VWAP",
+                    "n": "Transactions",
+                }
+            )
             cols = [c for c in ["Open", "High", "Low", "Close", "Volume", "VWAP", "Transactions"] if c in df.columns]
             return df[cols]
         except httpx.HTTPStatusError as exc:
@@ -253,6 +257,231 @@ class PolygonSource:
             strikes[s]["put_gamma"] = put.get("gamma", 0.0)
 
         return strikes
+
+    # ── Analyst Ratings (Benzinga) ──────────────────────────────
+
+    def get_analyst_ratings(
+        self,
+        ticker: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Historical analyst ratings from Benzinga via Polygon.
+
+        Returns list of dicts: {date, firm, action, from_grade, to_grade,
+        price_target, ticker}.
+        """
+        if not self._enabled():
+            return []
+
+        try:
+            data = self._get(
+                "/benzinga/v1/ratings",
+                params={
+                    "ticker": ticker,
+                    "limit": str(limit),
+                    "sort": "date.desc",
+                },
+            )
+            results = data.get("results", [])
+            ratings: list[dict] = []
+            for r in results:
+                ratings.append(
+                    {
+                        "date": r.get("date", ""),
+                        "firm": r.get("analyst", {}).get("name_full", "") or r.get("analyst_name", ""),
+                        "action": r.get("rating_action", ""),
+                        "from_grade": r.get("prior", {}).get("rating", ""),
+                        "to_grade": r.get("current", {}).get("rating", ""),
+                        "price_target": r.get("target_price", {}).get("current")
+                        if isinstance(r.get("target_price"), dict)
+                        else r.get("target_price"),
+                        "ticker": r.get("ticker", ticker),
+                    }
+                )
+            return ratings
+        except httpx.HTTPStatusError as exc:
+            logger.error("Polygon analyst ratings HTTP error for %s: %s", ticker, exc)
+            return []
+        except Exception:
+            logger.exception("Polygon analyst ratings failed for %s", ticker)
+            return []
+
+    # ── Consensus Target (Benzinga) ─────────────────────────────
+
+    def get_consensus_target(self, ticker: str) -> dict | None:
+        """Analyst consensus price target from Benzinga via Polygon.
+
+        Returns {target_consensus: float, target_high: float, target_low: float,
+        num_analysts: int} or None.
+        """
+        if not self._enabled():
+            return None
+        try:
+            data = self._get(
+                f"/benzinga/v1/consensus-ratings/{ticker}",
+                params={},
+            )
+            results = data.get("results", [])
+            if not results:
+                return None
+            r = results[0] if isinstance(results, list) else results
+            target = r.get("target_consensus") or r.get("targetConsensus")
+            if target is None or not isinstance(target, (int, float)) or target <= 0:
+                return None
+            return {
+                "target_consensus": float(target),
+                "target_high": float(r.get("target_high") or r.get("targetHigh") or target),
+                "target_low": float(r.get("target_low") or r.get("targetLow") or target),
+                "num_analysts": int(r.get("num_analysts") or r.get("numAnalysts") or 0),
+            }
+        except Exception:
+            logger.debug("Polygon consensus target failed for %s", ticker)
+            return None
+
+    # ── Short Volume ─────────────────────────────────────────────
+
+    def get_short_volume(
+        self,
+        ticker: str,
+        limit: int = 30,
+    ) -> list[dict]:
+        """Daily short volume data from FINRA via Polygon.
+
+        Returns list of dicts: {date, short_volume, total_volume, short_ratio}.
+        """
+        if not self._enabled():
+            return []
+
+        try:
+            data = self._get(
+                "/stocks/v1/short-volume",
+                params={
+                    "ticker": ticker,
+                    "limit": str(limit),
+                    "sort": "date.desc",
+                },
+            )
+            results = data.get("results", [])
+            records: list[dict] = []
+            for r in results:
+                short_vol = (
+                    (r.get("short_volume") or 0)
+                    + (r.get("adf_short_volume") or 0)
+                    + (r.get("nasdaq_carteret_short_volume") or 0)
+                )
+                total_vol = r.get("total_volume") or r.get("volume") or 0
+                if total_vol == 0 and short_vol > 0:
+                    total_vol = short_vol * 2
+                short_ratio = round(short_vol / total_vol, 4) if total_vol > 0 else 0.0
+                records.append(
+                    {
+                        "date": r.get("date", ""),
+                        "short_volume": short_vol,
+                        "total_volume": total_vol,
+                        "short_ratio": short_ratio,
+                        "ticker": r.get("ticker", ticker),
+                    }
+                )
+            return records
+        except httpx.HTTPStatusError as exc:
+            logger.error("Polygon short volume HTTP error for %s: %s", ticker, exc)
+            return []
+        except Exception:
+            logger.exception("Polygon short volume failed for %s", ticker)
+            return []
+
+    # ── Earnings (Benzinga) ──────────────────────────────────────
+
+    def get_earnings(
+        self,
+        ticker: str,
+        limit: int = 12,
+    ) -> list[dict]:
+        """Historical earnings data from Benzinga via Polygon.
+
+        Returns list of dicts matching the schema used by yfinance/FMP:
+        {date, eps_actual, eps_estimate, surprise_pct}.
+        """
+        if not self._enabled():
+            return []
+
+        try:
+            data = self._get(
+                "/benzinga/v1/earnings",
+                params={
+                    "ticker": ticker,
+                    "limit": str(limit),
+                    "sort": "date.desc",
+                    "importance": "0",
+                },
+            )
+            results = data.get("results", [])
+            records: list[dict] = []
+            for r in results:
+                eps_actual = r.get("eps")
+                eps_est = r.get("eps_est")
+                surprise = r.get("eps_surprise_percent")
+                if eps_actual is None and eps_est is None:
+                    continue
+                records.append(
+                    {
+                        "date": r.get("date", ""),
+                        "eps_actual": float(eps_actual) if eps_actual is not None else None,
+                        "eps_estimate": float(eps_est) if eps_est is not None else None,
+                        "surprise_pct": float(surprise) if surprise is not None else None,
+                        "revenue": r.get("revenue"),
+                        "revenue_est": r.get("revenue_est"),
+                    }
+                )
+            return records
+        except httpx.HTTPStatusError as exc:
+            logger.error("Polygon earnings HTTP error for %s: %s", ticker, exc)
+            return []
+        except Exception:
+            logger.exception("Polygon earnings failed for %s", ticker)
+            return []
+
+    # ── Premarket ─────────────────────────────────────────────────
+
+    def get_premarket_prices(self, tickers: list[str]) -> dict[str, float]:
+        """Fetch premarket prices for a batch of tickers via Polygon snapshot.
+
+        Uses /v2/snapshot/locale/us/markets/stocks/tickers which returns
+        preMarket price data when available (before market open). Falls back
+        to previous close if premarket data is absent.
+
+        Returns a dict mapping ticker -> premarket price (only tickers with
+        valid data are included).
+        """
+        if not self._enabled() or not tickers:
+            return {}
+
+        result: dict[str, float] = {}
+        batch_size = 50
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i : i + batch_size]
+            ticker_param = ",".join(batch)
+            try:
+                data = self._get(
+                    "/v2/snapshot/locale/us/markets/stocks/tickers",
+                    params={"tickers": ticker_param},
+                )
+                for item in data.get("tickers", []):
+                    sym = item.get("ticker", "")
+                    pre = item.get("preMarket", {})
+                    pre_price = pre.get("close") or pre.get("open") if isinstance(pre, dict) else None
+                    if pre_price and pre_price > 0:
+                        result[sym] = float(pre_price)
+                    else:
+                        prev = item.get("prevDay", {})
+                        prev_close = prev.get("c", 0) if isinstance(prev, dict) else 0
+                        if prev_close and prev_close > 0:
+                            result[sym] = float(prev_close)
+            except Exception:
+                logger.debug("Polygon premarket batch failed for chunk starting at %d", i)
+
+        logger.info("Polygon premarket: got %d/%d prices", len(result), len(tickers))
+        return result
 
     # ── Snapshot ─────────────────────────────────────────────────
 

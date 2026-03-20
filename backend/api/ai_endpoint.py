@@ -1,16 +1,53 @@
-"""Lightweight AI summarization endpoint for frontend tabs."""
+"""Lightweight AI summarization endpoint for frontend tabs.
+
+Dashboard AI types (market, regime_probs, allocation_explain, market_action)
+are cached server-side keyed by the current regime, so the dashboard loads
+instantly after the first computation.
+"""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from backend.ai.market_ai import ai_allocation_explain, ai_dcf_explain, ai_entry_timing, ai_investment_research, ai_market_action_banner, ai_market_summary, ai_market_timing_tip, ai_picks_summary, ai_portfolio_review, ai_regime_probs, ai_scan_summary, ai_signal_explain, ai_swing_invest, ai_swing_summary
+from backend.ai.market_ai import (
+    ai_allocation_explain,
+    ai_dcf_explain,
+    ai_entry_timing,
+    ai_investment_research,
+    ai_market_action_banner,
+    ai_market_summary,
+    ai_market_timing_tip,
+    ai_picks_summary,
+    ai_portfolio_review,
+    ai_regime_probs,
+    ai_scan_summary,
+    ai_signal_explain,
+    ai_swing_invest,
+    ai_swing_summary,
+)
+from backend.data.cache import data_cache
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 logger = logging.getLogger(__name__)
+
+DASHBOARD_AI_TYPES = {"market", "regime_probs", "allocation_explain", "market_action"}
+DASHBOARD_AI_TTL_HOURS = 0.5
+
+
+def _cache_key_for(req_type: str, data: dict) -> str:
+    """Build a stable cache key from the regime + VIX + confidence fingerprint."""
+    fingerprint = {
+        "regime": data.get("regime", ""),
+        "vix": round(data.get("vix", 0), 0),
+        "confidence": round(data.get("confidence", 0), 1),
+    }
+    h = hashlib.md5(json.dumps(fingerprint, sort_keys=True).encode()).hexdigest()[:8]
+    return f"ai:{req_type}:{h}"
 
 
 class AISummarizeRequest(BaseModel):
@@ -20,6 +57,13 @@ class AISummarizeRequest(BaseModel):
 
 @router.post("/summarize")
 async def summarize(req: AISummarizeRequest) -> dict:
+    if req.type in DASHBOARD_AI_TYPES:
+        cache_key = _cache_key_for(req.type, req.data)
+        cached = data_cache.get(cache_key)
+        if cached is not None and isinstance(cached, dict):
+            logger.debug("AI cache hit for %s", cache_key)
+            return {"result": cached}
+
     result = None
 
     if req.type == "market":
@@ -67,5 +111,10 @@ async def summarize(req: AISummarizeRequest) -> dict:
         dcf = req.data.get("dcf", {})
         fundamentals = req.data.get("fundamentals", {})
         result = ai_dcf_explain(dcf, fundamentals)
+
+    if req.type in DASHBOARD_AI_TYPES and result is not None:
+        cache_key = _cache_key_for(req.type, req.data)
+        data_cache.set(cache_key, result, ttl_hours=DASHBOARD_AI_TTL_HOURS)
+        logger.debug("AI cached %s", cache_key)
 
     return {"result": result}

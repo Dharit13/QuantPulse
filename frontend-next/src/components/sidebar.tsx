@@ -161,7 +161,7 @@ export function Sidebar() {
               key={href}
               href={href}
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-[14px] transition-all duration-150",
+                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-[14px] transition-all duration-150 cursor-pointer active:scale-[0.98]",
                 active
                   ? "bg-accent text-white font-semibold shadow-sm"
                   : "text-text-body hover:bg-card-alt hover:text-text-primary"
@@ -190,7 +190,7 @@ export function Sidebar() {
         )}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="flex items-center justify-center w-full py-2 rounded-xl text-text-secondary hover:text-text-primary hover:bg-card-alt transition-colors"
+          className="flex items-center justify-center w-full py-2 rounded-xl text-text-secondary hover:text-text-primary hover:bg-card-alt transition-colors cursor-pointer"
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {collapsed ? (

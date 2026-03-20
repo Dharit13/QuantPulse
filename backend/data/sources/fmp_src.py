@@ -9,6 +9,7 @@ Docs: https://intelligence.financialmodelingprep.com/developer/docs
 """
 
 import logging
+import time
 from datetime import date, timedelta
 
 import httpx
@@ -31,10 +32,12 @@ class FMPSource:
 
     SOURCE_NAME = "fmp"
 
+    _QUOTA_COOLDOWN_SEC = 300
+
     def __init__(self) -> None:
         self._api_key = settings.fmp_api_key
         self._client: httpx.Client | None = None
-        self._quota_exhausted = False
+        self._quota_exhausted_until: float | None = None
 
     @property
     def _http(self) -> httpx.Client:
@@ -45,8 +48,16 @@ class FMPSource:
             )
         return self._client
 
+    def _is_quota_exhausted(self) -> bool:
+        if self._quota_exhausted_until is not None:
+            if time.time() < self._quota_exhausted_until:
+                return True
+            self._quota_exhausted_until = None
+            logger.info("FMP quota cooldown expired, re-enabling requests")
+        return False
+
     def _enabled(self) -> bool:
-        return bool(self._api_key) and not self._quota_exhausted
+        return bool(self._api_key) and not self._is_quota_exhausted()
 
     def _get(self, path: str, params: dict | None = None) -> list | dict:
         """Rate-limited GET with api key injection. Returns parsed JSON.
@@ -55,7 +66,7 @@ class FMPSource:
         After the first 429 exhaustion, skips all further FMP calls for
         the session to avoid wasting time on retries.
         """
-        if self._quota_exhausted:
+        if self._is_quota_exhausted():
             return []
 
         params = dict(params or {})
@@ -74,8 +85,11 @@ class FMPSource:
                 logger.debug("FMP %s requires paid plan (HTTP %d)", path, exc.response.status_code)
                 return []
             if exc.response.status_code == 429:
-                self._quota_exhausted = True
-                logger.warning("FMP daily quota exhausted — disabling FMP for this session")
+                self._quota_exhausted_until = time.time() + self._QUOTA_COOLDOWN_SEC
+                logger.warning(
+                    "FMP rate limited — pausing for %ds",
+                    self._QUOTA_COOLDOWN_SEC,
+                )
                 return []
             raise
 
@@ -106,12 +120,12 @@ class FMPSource:
             return {
                 "market_cap": p.get("marketCap") or p.get("mktCap"),
                 "pe_ratio": p.get("pe") or r.get("priceEarningsRatio"),
-                "forward_pe": m.get("peRatio") or r.get("priceEarningsToGrowthRatio"),
+                "forward_pe": m.get("forwardPE") or r.get("priceToEarningsRatio"),
                 "peg_ratio": r.get("priceEarningsToGrowthRatio"),
                 "eps_trailing": p.get("eps"),
                 "eps_forward": None,
-                "revenue_growth": r.get("revenuePerShare"),
-                "profit_margin": r.get("netProfitMargin") or m.get("netIncomePerShare"),
+                "revenue_growth": m.get("revenueGrowth") or r.get("revenueGrowth"),
+                "profit_margin": r.get("netProfitMargin"),
                 "debt_to_equity": r.get("debtEquityRatio") or m.get("debtToEquity"),
                 "sector": p.get("sector", ""),
                 "industry": p.get("industry", ""),
@@ -119,8 +133,7 @@ class FMPSource:
                 "beta": p.get("beta"),
                 "dividend_yield": p.get("lastDividend") or p.get("lastDiv"),
                 "short_ratio": None,
-                "analyst_target": p.get("targetMeanPrice")
-                or (p.get("price", 0) * 1.1 if p.get("price") else None),
+                "analyst_target": p.get("targetMeanPrice") or (p.get("price", 0) * 1.1 if p.get("price") else None),
             }
         except httpx.HTTPStatusError as exc:
             logger.error("FMP fundamentals HTTP error for %s: %s", ticker, exc)
@@ -160,14 +173,16 @@ class FMPSource:
                 if eps_diluted is None:
                     continue
 
-                records.append({
-                    "date": report_date,
-                    "eps_actual": float(eps_diluted),
-                    "eps_estimate": float(eps_diluted),
-                    "surprise_pct": 0.0,
-                    "revenue": item.get("revenue"),
-                    "net_income": item.get("netIncome"),
-                })
+                records.append(
+                    {
+                        "date": report_date,
+                        "eps_actual": float(eps_diluted),
+                        "eps_estimate": float(eps_diluted),
+                        "surprise_pct": 0.0,
+                        "revenue": item.get("revenue"),
+                        "net_income": item.get("netIncome"),
+                    }
+                )
 
             records.sort(key=lambda r: r["date"], reverse=True)
             return records[:12]
@@ -206,14 +221,16 @@ class FMPSource:
 
             records: list[dict] = []
             for item in data:
-                records.append({
-                    "date": item.get("date", ""),
-                    "symbol": item.get("symbol", ""),
-                    "eps_estimate": item.get("epsEstimated"),
-                    "revenue_estimate": item.get("revenueEstimated"),
-                    "fiscal_period": item.get("fiscalDateEnding", ""),
-                    "time": item.get("time", ""),
-                })
+                records.append(
+                    {
+                        "date": item.get("date", ""),
+                        "symbol": item.get("symbol", ""),
+                        "eps_estimate": item.get("epsEstimated"),
+                        "revenue_estimate": item.get("revenueEstimated"),
+                        "fiscal_period": item.get("fiscalDateEnding", ""),
+                        "time": item.get("time", ""),
+                    }
+                )
 
             logger.info("FMP: fetched %d earnings calendar entries", len(records))
             return records
@@ -239,14 +256,16 @@ class FMPSource:
 
             records: list[dict] = []
             for item in data:
-                records.append({
-                    "date": item.get("date", ""),
-                    "estimated_eps_avg": item.get("estimatedEpsAvg"),
-                    "estimated_eps_high": item.get("estimatedEpsHigh"),
-                    "estimated_eps_low": item.get("estimatedEpsLow"),
-                    "estimated_revenue_avg": item.get("estimatedRevenueAvg"),
-                    "number_analysts": item.get("numberAnalystEstimatedEps", 0),
-                })
+                records.append(
+                    {
+                        "date": item.get("date", ""),
+                        "estimated_eps_avg": item.get("estimatedEpsAvg"),
+                        "estimated_eps_high": item.get("estimatedEpsHigh"),
+                        "estimated_eps_low": item.get("estimatedEpsLow"),
+                        "estimated_revenue_avg": item.get("estimatedRevenueAvg"),
+                        "number_analysts": item.get("numberAnalystEstimatedEps", 0),
+                    }
+                )
 
             return records
         except httpx.HTTPStatusError as exc:
@@ -255,6 +274,30 @@ class FMPSource:
         except Exception:
             logger.exception("FMP analyst estimates failed for %s", ticker)
             return []
+
+    def get_dcf(self, ticker: str) -> dict | None:
+        """Pre-computed DCF fair value from FMP.
+
+        Returns {dcf: float, stock_price: float} or None.
+        """
+        if not self._enabled():
+            return None
+        try:
+            data = self._get("/discounted-cash-flow", params={"symbol": ticker})
+            if not data:
+                return None
+            item = data[0] if isinstance(data, list) else data
+            dcf_val = item.get("dcf")
+            price = item.get("stockPrice") or item.get("Stock Price")
+            if dcf_val is None or not isinstance(dcf_val, (int, float)) or dcf_val <= 0:
+                return None
+            return {
+                "dcf": float(dcf_val),
+                "stock_price": float(price) if price else None,
+            }
+        except Exception:
+            logger.debug("FMP DCF fetch failed for %s", ticker)
+            return None
 
     def get_eps_surprises(self, ticker: str) -> list[dict]:
         """EPS surprise history — delegates to get_earnings()."""

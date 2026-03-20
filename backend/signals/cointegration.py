@@ -134,7 +134,7 @@ def compute_hurst_exponent(series: pd.Series, max_lag: int = 100) -> float:
         lags = range(2, min(max_lag, len(series) // 2))
         tau = []
         for lag in lags:
-            diffs = (series.values[lag:] - series.values[:-lag])
+            diffs = series.values[lag:] - series.values[:-lag]
             tau.append(np.std(diffs))
 
         if not tau or any(t <= 0 for t in tau):
@@ -197,17 +197,15 @@ def validate_pair(
     hl = compute_half_life(spread)
     hurst = compute_hurst_exponent(spread)
 
-    tests_passed = sum([
-        adf["is_stationary"],
-        eg["is_cointegrated"],
-        joh["is_cointegrated"],
-    ])
-
-    is_valid = (
-        tests_passed >= 2
-        and min_half_life <= hl <= max_half_life
-        and hurst < 0.5
+    tests_passed = sum(
+        [
+            adf["is_stationary"],
+            eg["is_cointegrated"],
+            joh["is_cointegrated"],
+        ]
     )
+
+    is_valid = tests_passed >= 2 and min_half_life <= hl <= max_half_life and hurst < 0.5
 
     return {
         "is_valid": is_valid,

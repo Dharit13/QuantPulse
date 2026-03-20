@@ -1,10 +1,39 @@
 import logging
+import threading
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+
+class _RateLimiter:
+    """Simple token-bucket rate limiter: max `rate` calls per `per` seconds."""
+
+    def __init__(self, rate: int = 5, per: float = 5.0):
+        self._rate = rate
+        self._per = per
+        self._lock = threading.Lock()
+        self._tokens = float(rate)
+        self._last = time.monotonic()
+
+    def acquire(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last
+            self._tokens = min(self._rate, self._tokens + elapsed * (self._rate / self._per))
+            self._last = now
+            if self._tokens < 1:
+                sleep_time = (1 - self._tokens) * (self._per / self._rate)
+                time.sleep(sleep_time)
+                self._tokens = 0
+            else:
+                self._tokens -= 1
+
+
+_yf_limiter = _RateLimiter(rate=5, per=5.0)
 
 
 class YFinanceSource:
@@ -18,6 +47,7 @@ class YFinanceSource:
         end: str | None = None,
     ) -> pd.DataFrame:
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             if start and end:
                 df = t.history(start=start, end=end, auto_adjust=True)
@@ -27,7 +57,7 @@ class YFinanceSource:
                 logger.warning("No data returned for %s", ticker)
             return df
         except Exception:
-            logger.exception("Failed to fetch OHLCV for %s", ticker)
+            logger.debug("Failed to fetch OHLCV for %s", ticker)
             return pd.DataFrame()
 
     def get_multiple_ohlcv(
@@ -36,36 +66,54 @@ class YFinanceSource:
         period: str = "2y",
     ) -> dict[str, pd.DataFrame]:
         results = {}
+        logger.info("Batch-fetching %d tickers via yf.download...", len(tickers))
         try:
-            logger.info("Downloading %d tickers...", len(tickers))
-            data = yf.download(tickers, period=period, group_by="ticker", auto_adjust=True, threads=True, progress=False)
-            if isinstance(data.columns, pd.MultiIndex):
+            _yf_limiter.acquire()
+            batch = yf.download(
+                tickers,
+                period=period,
+                group_by="ticker",
+                threads=False,
+                progress=False,
+            )
+            if batch.empty:
+                return results
+            if len(tickers) == 1:
+                if not batch.empty:
+                    results[tickers[0]] = batch
+            else:
                 for ticker in tickers:
                     try:
-                        results[ticker] = data[ticker].dropna(how="all")
-                    except KeyError:
-                        logger.warning("Ticker %s not found in batch download", ticker)
-            else:
-                # Single ticker case
-                results[tickers[0]] = data.dropna(how="all")
-            logger.info("Download complete — %d tickers fetched", len(results))
+                        df = batch[ticker].dropna(how="all")
+                        if not df.empty:
+                            results[ticker] = df
+                    except (KeyError, Exception):
+                        pass
         except Exception:
-            logger.exception("Batch download failed, falling back to individual fetches")
+            logger.warning("Batch download failed, falling back to individual fetches")
             for ticker in tickers:
-                results[ticker] = self.get_daily_ohlcv(ticker, period=period)
+                try:
+                    df = self.get_daily_ohlcv(ticker, period=period)
+                    if not df.empty:
+                        results[ticker] = df
+                except Exception:
+                    pass
+        logger.info("Fetch complete — %d/%d tickers", len(results), len(tickers))
         return results
 
     def get_current_price(self, ticker: str) -> float | None:
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             info = t.fast_info
             return float(info.get("lastPrice", info.get("previousClose", 0)))
         except Exception:
-            logger.exception("Failed to get current price for %s", ticker)
+            logger.debug("Failed to get current price for %s", ticker)
             return None
 
     def get_fundamentals(self, ticker: str) -> dict:
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             info = t.info
             return {
@@ -87,34 +135,37 @@ class YFinanceSource:
                 "analyst_target": info.get("targetMeanPrice"),
             }
         except Exception:
-            logger.exception("Failed to get fundamentals for %s", ticker)
+            logger.debug("Failed to get fundamentals for %s", ticker)
             return {}
 
     def get_cashflow(self, ticker: str) -> pd.DataFrame:
         """Annual cash flow statement. Rows include 'Free Cash Flow',
         'Operating Cash Flow', 'Capital Expenditure', etc."""
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             cf = t.cashflow
             if cf is None or cf.empty:
                 return pd.DataFrame()
             return cf
         except Exception:
-            logger.exception("Failed to get cash flow for %s", ticker)
+            logger.debug("Failed to get cash flow for %s", ticker)
             return pd.DataFrame()
 
     def get_shares_outstanding(self, ticker: str) -> int | None:
         """Shares outstanding from yfinance info."""
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             info = t.info
             return info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
         except Exception:
-            logger.exception("Failed to get shares outstanding for %s", ticker)
+            logger.debug("Failed to get shares outstanding for %s", ticker)
             return None
 
     def get_options_chain(self, ticker: str, expiry: str | None = None) -> dict:
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             dates = t.options
             if not dates:
@@ -129,15 +180,16 @@ class YFinanceSource:
                 "expiry_used": target,
             }
         except Exception:
-            logger.exception("Failed to get options for %s", ticker)
+            logger.debug("Failed to get options for %s", ticker)
             return {"expiries": [], "calls": pd.DataFrame(), "puts": pd.DataFrame()}
 
     def get_earnings_dates(self, ticker: str) -> pd.DataFrame:
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             return t.earnings_dates
         except Exception:
-            logger.exception("Failed to get earnings dates for %s", ticker)
+            logger.debug("Failed to get earnings dates for %s", ticker)
             return pd.DataFrame()
 
     def get_earnings_history(self, ticker: str) -> list[dict]:
@@ -147,6 +199,7 @@ class YFinanceSource:
         Falls back gracefully if yfinance doesn't have the data.
         """
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             df = t.earnings_dates
             if df is None or df.empty:
@@ -159,19 +212,17 @@ class YFinanceSource:
                 if pd.isna(actual) or pd.isna(estimate):
                     continue
 
-                surprise_pct = (
-                    (actual - estimate) / abs(estimate) * 100
-                    if estimate != 0
-                    else 0.0
-                )
-                report_date = idx.date() if hasattr(idx, "date") else idx
+                surprise_pct = (actual - estimate) / abs(estimate) * 100 if estimate != 0 else 0.0
+                report_date = pd.Timestamp(idx).date() if isinstance(idx, pd.Timestamp) else idx
 
-                records.append({
-                    "date": report_date,
-                    "eps_actual": float(actual),
-                    "eps_estimate": float(estimate),
-                    "surprise_pct": round(float(surprise_pct), 2),
-                })
+                records.append(
+                    {
+                        "date": report_date,
+                        "eps_actual": float(actual),
+                        "eps_estimate": float(estimate),
+                        "surprise_pct": round(float(surprise_pct), 2),
+                    }
+                )
 
             # Only return past earnings (not future estimates)
             today = datetime.now().date()
@@ -179,7 +230,46 @@ class YFinanceSource:
             records.sort(key=lambda r: r["date"], reverse=True)
             return records[:12]
         except Exception:
-            logger.exception("Failed to get earnings history for %s", ticker)
+            logger.debug("Failed to get earnings history for %s", ticker)
+            return []
+
+    def get_analyst_revisions(self, ticker: str, limit: int = 20) -> list[dict]:
+        """Individual analyst upgrade/downgrade events with price targets.
+
+        Each dict: {date, firm, action, from_grade, to_grade, price_target}
+        """
+        try:
+            _yf_limiter.acquire()
+            t = yf.Ticker(ticker)
+            ud = t.upgrades_downgrades
+            if ud is None or ud.empty:
+                return []
+
+            records: list[dict] = []
+            for idx, row in ud.head(limit).iterrows():
+                rev_date = idx.date() if hasattr(idx, "date") else idx
+                action_raw = str(row.get("Action", "")).lower()
+                action_map = {
+                    "up": "upgrade",
+                    "down": "downgrade",
+                    "main": "maintains",
+                    "reit": "reiterates",
+                    "init": "initiates",
+                }
+                action = action_map.get(action_raw, action_raw)
+                records.append(
+                    {
+                        "date": rev_date,
+                        "firm": row.get("Firm", ""),
+                        "action": action,
+                        "from_grade": row.get("FromGrade", ""),
+                        "to_grade": row.get("ToGrade", ""),
+                        "price_target": row.get("currentPriceTarget"),
+                    }
+                )
+            return records
+        except Exception:
+            logger.debug("Failed to get analyst revisions for %s", ticker)
             return []
 
     def get_recommendation_trends(self, ticker: str) -> list[dict]:
@@ -188,6 +278,7 @@ class YFinanceSource:
         Each dict: {date, strong_buy, buy, hold, sell, strong_sell}
         """
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             recs = t.recommendations
             if recs is None or recs.empty:
@@ -196,23 +287,23 @@ class YFinanceSource:
             records: list[dict] = []
             for idx, row in recs.iterrows():
                 rec_date = idx.date() if hasattr(idx, "date") else idx
-                records.append({
-                    "date": rec_date,
-                    "strong_buy": int(row.get("strongBuy", row.get("To Grade", 0)) or 0)
-                    if "strongBuy" in row.index
-                    else 0,
-                    "buy": int(row.get("buy", 0) or 0) if "buy" in row.index else 0,
-                    "hold": int(row.get("hold", 0) or 0) if "hold" in row.index else 0,
-                    "sell": int(row.get("sell", 0) or 0) if "sell" in row.index else 0,
-                    "strong_sell": int(row.get("strongSell", 0) or 0)
-                    if "strongSell" in row.index
-                    else 0,
-                })
+                records.append(
+                    {
+                        "date": rec_date,
+                        "strong_buy": int(row.get("strongBuy", row.get("To Grade", 0)) or 0)
+                        if "strongBuy" in row.index
+                        else 0,
+                        "buy": int(row.get("buy", 0) or 0) if "buy" in row.index else 0,
+                        "hold": int(row.get("hold", 0) or 0) if "hold" in row.index else 0,
+                        "sell": int(row.get("sell", 0) or 0) if "sell" in row.index else 0,
+                        "strong_sell": int(row.get("strongSell", 0) or 0) if "strongSell" in row.index else 0,
+                    }
+                )
 
             records.sort(key=lambda r: r["date"], reverse=True)
             return records[:24]
         except Exception:
-            logger.exception("Failed to get recommendation trends for %s", ticker)
+            logger.debug("Failed to get recommendation trends for %s", ticker)
             return []
 
     def get_earnings_day_return(self, ticker: str, earnings_date: str) -> float | None:
@@ -221,6 +312,7 @@ class YFinanceSource:
         Returns the close-to-close return as a percentage.
         """
         try:
+            _yf_limiter.acquire()
             t = yf.Ticker(ticker)
             start = pd.Timestamp(earnings_date) - timedelta(days=5)
             end = pd.Timestamp(earnings_date) + timedelta(days=3)
@@ -243,7 +335,7 @@ class YFinanceSource:
             earn_close = float(df["Close"].iloc[idx])
             return round((earn_close - prev_close) / prev_close * 100, 2) if prev_close > 0 else None
         except Exception:
-            logger.exception("Failed to get earnings day return for %s", ticker)
+            logger.debug("Failed to get earnings day return for %s", ticker)
             return None
 
 

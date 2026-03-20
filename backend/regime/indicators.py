@@ -7,7 +7,6 @@ Computes the 4 indicator pillars used by the regime detector:
 4. Cross-asset confirmation (25%)
 """
 
-import numpy as np
 import pandas as pd
 
 
@@ -43,7 +42,9 @@ def compute_vix_indicator(vix_df: pd.DataFrame) -> dict:
     return {"level": level, "score": score, "vix": vix, "term_structure": term_structure}
 
 
-def compute_breadth_indicator(spy_constituents_df: pd.DataFrame | None = None, pct_above_200sma: float | None = None) -> dict:
+def compute_breadth_indicator(
+    spy_constituents_df: pd.DataFrame | None = None, pct_above_200sma: float | None = None
+) -> dict:
     """Market breadth: % of S&P 500 stocks above 200-day SMA."""
     if pct_above_200sma is not None:
         pct = pct_above_200sma

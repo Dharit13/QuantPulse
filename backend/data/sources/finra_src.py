@@ -114,15 +114,19 @@ class FINRASource:
                         "totalWeeklyTradeCount",
                         "lastUpdateDate",
                     ],
-                    "dateRangeFilters": [{
-                        "fieldName": "weekStartDate",
-                        "startDate": start_date.isoformat(),
-                        "endDate": end_date.isoformat(),
-                    }],
-                    "domainFilters": [{
-                        "fieldName": "issueSymbolIdentifier",
-                        "values": [ticker.upper()],
-                    }],
+                    "dateRangeFilters": [
+                        {
+                            "fieldName": "weekStartDate",
+                            "startDate": start_date.isoformat(),
+                            "endDate": end_date.isoformat(),
+                        }
+                    ],
+                    "domainFilters": [
+                        {
+                            "fieldName": "issueSymbolIdentifier",
+                            "values": [ticker.upper()],
+                        }
+                    ],
                     "limit": 100,
                     "sortFields": ["-weekStartDate"],
                 },
@@ -138,11 +142,13 @@ class FINRASource:
                 ats_volume = item.get("totalWeeklyShareQuantity", 0)
                 trade_count = item.get("totalWeeklyTradeCount", 0)
 
-                records.append({
-                    "week_start": week_start,
-                    "ats_volume": int(ats_volume),
-                    "trades_count": int(trade_count),
-                })
+                records.append(
+                    {
+                        "week_start": week_start,
+                        "ats_volume": int(ats_volume),
+                        "trades_count": int(trade_count),
+                    }
+                )
 
             if not records:
                 return pd.DataFrame()

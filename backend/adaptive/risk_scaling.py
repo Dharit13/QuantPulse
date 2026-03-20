@@ -19,19 +19,18 @@ def get_adaptive_risk_limits(vol: VolContext) -> dict:
         "flatten_at_drawdown_pct": round(-0.15 * min(1.0, ps), 3),
         "daily_var_limit_pct": round(0.02 * ps, 3),
         "max_sector_pct": (
-            0.15 if vol.correlation_regime == "herding"
-            else 0.20 if vol.correlation_regime == "normal"
-            else 0.30
+            0.15 if vol.correlation_regime == "herding" else 0.20 if vol.correlation_regime == "normal" else 0.30
         ),
         "tail_hedge_pct": (
-            0.05 if vol.vol_regime.value in ("ultra_low", "low")
-            else 0.03 if vol.vol_regime.value == "normal"
-            else 0.02 if vol.vol_regime.value == "elevated"
+            0.05
+            if vol.vol_regime.value in ("ultra_low", "low")
+            else 0.03
+            if vol.vol_regime.value == "normal"
+            else 0.02
+            if vol.vol_regime.value == "elevated"
             else 0.01
         ),
         "max_position_correlation": (
-            0.60 if vol.correlation_regime == "herding"
-            else 0.75 if vol.correlation_regime == "normal"
-            else 0.85
+            0.60 if vol.correlation_regime == "herding" else 0.75 if vol.correlation_regime == "normal" else 0.85
         ),
     }

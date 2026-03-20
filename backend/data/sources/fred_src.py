@@ -246,10 +246,15 @@ class FREDSource:
 
         snapshot: dict[str, float | None] = {}
         indicators = [
-            "10y_yield", "2y_yield", "3mo_yield",
-            "10y_2y_spread", "10y_3mo_spread",
-            "fed_funds", "hy_oas",
-            "unemployment", "dxy",
+            "10y_yield",
+            "2y_yield",
+            "3mo_yield",
+            "10y_2y_spread",
+            "10y_3mo_spread",
+            "fed_funds",
+            "hy_oas",
+            "unemployment",
+            "dxy",
         ]
 
         for name in indicators:

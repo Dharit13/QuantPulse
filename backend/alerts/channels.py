@@ -84,7 +84,12 @@ class SlackChannel(AlertChannel):
             logger.debug("Slack not configured, skipping")
             return False
         try:
-            priority_emoji = {"urgent": ":rotating_light:", "high": ":warning:", "medium": ":information_source:", "low": ":memo:"}
+            priority_emoji = {
+                "urgent": ":rotating_light:",
+                "high": ":warning:",
+                "medium": ":information_source:",
+                "low": ":memo:",
+            }
             emoji = priority_emoji.get(priority, ":bell:")
             payload = {
                 "channel": settings.slack_channel,

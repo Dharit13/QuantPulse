@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import numpy as np
 
-from backend.models.database import PhantomTradeRecord, SessionLocal
+from backend.models.database import get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -40,38 +40,47 @@ def get_similar_signal_evidence(
     min_score: float = 0.0,
 ) -> ShadowEvidence:
     """Query closed phantoms matching the given filters and compute stats."""
-    cutoff = date.today() - timedelta(days=lookback_days)
+    cutoff = str(date.today() - timedelta(days=lookback_days))
 
-    with SessionLocal() as db:
-        q = db.query(PhantomTradeRecord).filter(
-            PhantomTradeRecord.strategy == strategy,
-            PhantomTradeRecord.direction == direction,
-            PhantomTradeRecord.signal_date >= cutoff,
-            PhantomTradeRecord.phantom_outcome.isnot(None),
-        )
+    sb = get_supabase()
+    q = (
+        sb.table("phantom_trades")
+        .select("*")
+        .eq("strategy", strategy)
+        .eq("direction", direction)
+        .gte("signal_date", cutoff)
+        .not_.is_("phantom_outcome", "null")
+    )
 
-        if regime:
-            q = q.filter(PhantomTradeRecord.regime == regime)
+    if regime:
+        q = q.eq("regime", regime)
 
-        if min_score > 0:
-            q = q.filter(PhantomTradeRecord.signal_score >= min_score)
+    if min_score > 0:
+        q = q.gte("signal_score", min_score)
 
-        phantoms = q.all()
+    result = q.execute()
+    phantoms = result.data
 
     if not phantoms:
         return _empty_evidence()
 
-    pnl_values = [p.phantom_pnl_pct for p in phantoms if p.phantom_pnl_pct is not None]
+    pnl_values = [p["phantom_pnl_pct"] for p in phantoms if p.get("phantom_pnl_pct") is not None]
     if not pnl_values:
         return _empty_evidence()
 
-    wins = [p for p in phantoms if p.phantom_outcome == "would_have_won"]
+    wins = [p for p in phantoms if p.get("phantom_outcome") == "would_have_won"]
     win_rate = len(wins) / len(phantoms) if phantoms else 0.0
 
     hold_days_list = []
     for p in phantoms:
-        if p.phantom_exit_date and p.signal_date:
-            days = (p.phantom_exit_date - p.signal_date).days
+        if p.get("phantom_exit_date") and p.get("signal_date"):
+            exit_d = (
+                date.fromisoformat(p["phantom_exit_date"])
+                if isinstance(p["phantom_exit_date"], str)
+                else p["phantom_exit_date"]
+            )
+            sig_d = date.fromisoformat(p["signal_date"]) if isinstance(p["signal_date"], str) else p["signal_date"]
+            days = (exit_d - sig_d).days
             hold_days_list.append(max(1, days))
 
     avg_hold = float(np.mean(hold_days_list)) if hold_days_list else 0.0

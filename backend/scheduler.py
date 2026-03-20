@@ -8,21 +8,22 @@ by main.py's lifespan; this module only defines and registers jobs.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from collections.abc import Callable
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from backend.adaptive.scheduler import CALIBRATION_SCHEDULE
-from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 # ── Job implementations ─────────────────────────────────────
 
+
 def _refresh_vol_context() -> None:
     from backend.adaptive.vol_context import compute_vol_context
     from backend.data.fetcher import DataFetcher
+
     f = DataFetcher()
     try:
         vix_df = f.get_daily_ohlcv("^VIX", period="1y")
@@ -37,6 +38,7 @@ def _refresh_risk_limits() -> None:
     from backend.adaptive.risk_scaling import get_adaptive_risk_limits
     from backend.adaptive.vol_context import compute_vol_context
     from backend.data.fetcher import DataFetcher
+
     f = DataFetcher()
     try:
         vix_df = f.get_daily_ohlcv("^VIX", period="1y")
@@ -51,6 +53,7 @@ def _refresh_risk_limits() -> None:
 def _refresh_regime() -> None:
     from backend.data.fetcher import DataFetcher
     from backend.regime.detector import detect_regime
+
     f = DataFetcher()
     try:
         vix_df = f.get_daily_ohlcv("^VIX", period="1y")
@@ -63,11 +66,13 @@ def _refresh_regime() -> None:
 
 def _refresh_correlation_matrix() -> None:
     from backend.tracker.trade_journal import TradeJournal
+
     j = TradeJournal()
     try:
         active = j.get_active_trades()
         if active:
             from backend.risk.correlation import compute_correlation_matrix
+
             tickers = [t.ticker for t in active]
             corr = compute_correlation_matrix(tickers)
             logger.info("Correlation matrix updated for %d positions", len(tickers))
@@ -83,6 +88,7 @@ def _refresh_strategy_params() -> None:
     )
     from backend.adaptive.vol_context import compute_vol_context
     from backend.data.fetcher import DataFetcher
+
     f = DataFetcher()
     try:
         vix_df = f.get_daily_ohlcv("^VIX", period="1y")
@@ -109,6 +115,7 @@ def _recalibrate_regime_thresholds() -> None:
     from backend.adaptive.regime_calibration import calibrate_regime_thresholds
     from backend.data.fetcher import DataFetcher
     from backend.regime.indicators import compute_adx_indicator
+
     f = DataFetcher()
     try:
         vix_df = f.get_daily_ohlcv("^VIX", period="1y")
@@ -147,17 +154,20 @@ def _revalidate_pairs() -> None:
 
 def _alpha_decay_audit() -> None:
     from backend.signals.decay_monitor import scan_all_strategies
+
     try:
-        import numpy as np
         reports = scan_all_strategies({})
         for strat, report in reports.items():
-            logger.info("Decay audit — %s: status=%s mult=%.2f", strat, report.status.value, report.allocation_multiplier)
+            logger.info(
+                "Decay audit — %s: status=%s mult=%.2f", strat, report.status.value, report.allocation_multiplier
+            )
     except Exception as e:
         logger.warning("Alpha decay audit failed: %s", e)
 
 
 def _refresh_universe() -> None:
     from backend.data.universe import fetch_sp500_constituents
+
     try:
         df = fetch_sp500_constituents()
         logger.info("Universe refreshed: %d constituents", len(df))
@@ -168,6 +178,7 @@ def _refresh_universe() -> None:
 def _check_trade_alerts() -> None:
     from backend.alerts.dispatcher import AlertDispatcher
     from backend.tracker.trade_journal import TradeJournal
+
     j = TradeJournal()
     d = AlertDispatcher()
     alerts = j.check_active_trade_alerts()
@@ -182,12 +193,13 @@ def _check_trade_alerts() -> None:
 
 def _update_phantoms() -> None:
     from backend.tracker.trade_journal import TradeJournal
+
     TradeJournal().update_phantom_outcomes()
 
 
 # ── Registration ─────────────────────────────────────────────
 
-JOB_MAP: dict[str, callable] = {
+JOB_MAP: dict[str, Callable] = {
     "vol_context": _refresh_vol_context,
     "risk_limits": _refresh_risk_limits,
     "strategy_params": _refresh_strategy_params,
@@ -206,6 +218,7 @@ JOB_MAP: dict[str, callable] = {
 def _run_pipeline_fast() -> None:
     """Stocks, regime, portfolio — every 2 min."""
     from backend.pipeline import refresh_fast
+
     try:
         refresh_fast()
     except Exception as e:
@@ -215,6 +228,7 @@ def _run_pipeline_fast() -> None:
 def _run_pipeline_medium() -> None:
     """Scanner, sectors, swing — every 10 min."""
     from backend.pipeline import refresh_medium
+
     try:
         refresh_medium()
     except Exception as e:
@@ -224,27 +238,157 @@ def _run_pipeline_medium() -> None:
 def _run_pipeline_earnings() -> None:
     """Earnings calendar — twice daily."""
     from backend.pipeline import refresh_earnings_calendar
+
     try:
         refresh_earnings_calendar()
     except Exception as e:
         logger.exception("Pipeline[earnings] failed: %s", e)
 
 
+def _run_data_refresh_prices() -> None:
+    """Market prices + cross-asset — every 15 min."""
+    from backend.data.refresh_scheduler import refresh_cross_asset_prices, refresh_market_prices
+
+    try:
+        refresh_market_prices()
+        refresh_cross_asset_prices()
+    except Exception as e:
+        logger.exception("DataRefresh[prices] failed: %s", e)
+
+
+def _run_data_refresh_flow() -> None:
+    """Options flow — every 30 min."""
+    from backend.data.refresh_scheduler import refresh_options_flow
+
+    try:
+        refresh_options_flow()
+    except Exception as e:
+        logger.exception("DataRefresh[flow] failed: %s", e)
+
+
+def _run_data_refresh_news() -> None:
+    """News sentiment (yfinance + FinBERT) — every 2 hours."""
+    from backend.data.refresh_scheduler import refresh_news_sentiment, refresh_revisions
+
+    try:
+        refresh_revisions()
+        refresh_news_sentiment()
+    except Exception as e:
+        logger.exception("DataRefresh[news] failed: %s", e)
+
+
+def _run_data_refresh_daily() -> None:
+    """Fundamentals, earnings, dark pool, insider — daily."""
+    from backend.data.refresh_scheduler import (
+        refresh_dark_pool,
+        refresh_earnings,
+        refresh_fundamentals,
+        refresh_insider_trades,
+    )
+
+    try:
+        refresh_fundamentals()
+        refresh_earnings()
+        refresh_dark_pool()
+        refresh_insider_trades()
+    except Exception as e:
+        logger.exception("DataRefresh[daily] failed: %s", e)
+
+
+def _run_data_refresh_universe() -> None:
+    """Universe — weekly."""
+    from backend.data.refresh_scheduler import refresh_universe
+
+    try:
+        refresh_universe()
+    except Exception as e:
+        logger.exception("DataRefresh[universe] failed: %s", e)
+
+
+def _run_data_cleanup() -> None:
+    """Data retention cleanup — weekly."""
+    from backend.data.refresh_scheduler import cleanup_old_data
+
+    try:
+        cleanup_old_data()
+    except Exception as e:
+        logger.exception("DataRefresh[cleanup] failed: %s", e)
+
+
 def register_all_jobs(scheduler: BackgroundScheduler) -> None:
     """Register every job from CALIBRATION_SCHEDULE onto the scheduler."""
 
+    # ── Data pre-fetch pipeline ──
+    scheduler.add_job(
+        _run_data_refresh_prices,
+        "interval",
+        minutes=15,
+        id="data_prices",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_data_refresh_flow,
+        "interval",
+        minutes=30,
+        id="data_flow",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_data_refresh_news,
+        "interval",
+        hours=2,
+        id="data_news",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_data_refresh_daily,
+        "cron",
+        hour=6,
+        minute=30,
+        id="data_daily",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_data_refresh_universe,
+        "cron",
+        day_of_week="sun",
+        hour=18,
+        id="data_universe",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_data_cleanup,
+        "cron",
+        day_of_week="sun",
+        hour=19,
+        id="data_cleanup",
+        replace_existing=True,
+    )
+    logger.info(
+        "Registered data refresh jobs: prices (15m), flow (30m), news (2h), daily (6:30am), universe (Sun), cleanup (Sun)"
+    )
+
     # ── Tiered data pipeline ──
     scheduler.add_job(
-        _run_pipeline_fast, "interval", minutes=2,
-        id="pipeline_fast", replace_existing=True,
+        _run_pipeline_fast,
+        "interval",
+        minutes=2,
+        id="pipeline_fast",
+        replace_existing=True,
     )
     scheduler.add_job(
-        _run_pipeline_medium, "interval", minutes=10,
-        id="pipeline_medium", replace_existing=True,
+        _run_pipeline_medium,
+        "interval",
+        minutes=10,
+        id="pipeline_medium",
+        replace_existing=True,
     )
     scheduler.add_job(
-        _run_pipeline_earnings, "cron", hour="7,12",
-        id="pipeline_earnings", replace_existing=True,
+        _run_pipeline_earnings,
+        "cron",
+        hour="7,12",
+        id="pipeline_earnings",
+        replace_existing=True,
     )
     logger.info("Registered pipeline jobs: fast (2m), medium (10m), earnings (7am+12pm)")
 
@@ -254,7 +398,9 @@ def register_all_jobs(scheduler: BackgroundScheduler) -> None:
 
     # Calibration jobs that don't overlap with the pipeline
     PIPELINE_HANDLED = {
-        "vol_context", "regime_detection", "strategy_weights",
+        "vol_context",
+        "regime_detection",
+        "strategy_weights",
     }
 
     for name, cfg in CALIBRATION_SCHEDULE.items():
@@ -276,7 +422,7 @@ def register_all_jobs(scheduler: BackgroundScheduler) -> None:
         elif interval == "daily":
             hour = 7
             minute = 0
-            time_str = cfg.get("time", "")
+            time_str = str(cfg.get("time", ""))
             if ":" in time_str:
                 parts = time_str.split()
                 time_parts = parts[0].split(":")

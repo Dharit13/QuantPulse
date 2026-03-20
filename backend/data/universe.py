@@ -26,16 +26,18 @@ def fetch_sp500_constituents() -> pd.DataFrame:
         resp.raise_for_status()
         tables = pd.read_html(StringIO(resp.text), header=0)
         df = tables[0]
-        df = df.rename(columns={
-            "Symbol": "ticker",
-            "Security": "name",
-            "GICS Sector": "sector",
-            "GICS Sub-Industry": "sub_industry",
-            "Headquarters Location": "hq",
-            "Date added": "date_added",
-            "CIK": "cik",
-            "Founded": "founded",
-        })
+        df = df.rename(
+            columns={
+                "Symbol": "ticker",
+                "Security": "name",
+                "GICS Sector": "sector",
+                "GICS Sub-Industry": "sub_industry",
+                "Headquarters Location": "hq",
+                "Date added": "date_added",
+                "CIK": "cik",
+                "Founded": "founded",
+            }
+        )
         df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
         df = df[["ticker", "name", "sector", "sub_industry"]].copy()
         data_cache.set(CACHE_KEY, df, ttl_hours=CACHE_TTL_HOURS)

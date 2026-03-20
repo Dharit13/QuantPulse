@@ -21,16 +21,13 @@ Reference: QUANTPULSE_FINAL_SPEC.md §8
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date
 
-import numpy as np
 import pandas as pd
 
 from backend.adaptive.kelly_adaptive import compute_adaptive_kelly
-from backend.adaptive.stops import compute_stop
 from backend.adaptive.thresholds import get_gap_reversion_params
 from backend.adaptive.vol_context import VolContext
-from backend.config import settings
 from backend.data.fetcher import data_fetcher
 from backend.data.universe import fetch_sp500_constituents
 from backend.models.schemas import StrategyName, TradeSignal
@@ -72,6 +69,12 @@ class GapReversionStrategy(BaseStrategy):
         regime = kwargs.get("regime", "bull_trend")
         tickers = kwargs.get("tickers")
         premarket_prices: dict[str, float] = kwargs.get("premarket_prices", {})
+        if not premarket_prices:
+            logger.warning(
+                "Gap reversion: no premarket_prices provided — using regular market "
+                "prices as fallback. Gap detection may be unreliable during market hours. "
+                "Pre-market data requires a paid source (e.g. Polygon)."
+            )
         params = self.get_params(vol)
 
         if vol.vix_current > params["max_vix_for_trading"]:
@@ -96,7 +99,11 @@ class GapReversionStrategy(BaseStrategy):
                 break
 
             signal = self._evaluate_gap(
-                ticker, vol, regime, params, premarket_prices.get(ticker),
+                ticker,
+                vol,
+                regime,
+                params,
+                premarket_prices.get(ticker),
             )
             if signal is None:
                 continue

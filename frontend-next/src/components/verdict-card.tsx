@@ -40,7 +40,7 @@ export function VerdictCard({
   return (
     <div
       className={cn(
-        "rounded-2xl border px-7 py-6",
+        "rounded-2xl border px-7 py-6 transition-all duration-200 hover:shadow-[var(--shadow-card-hover)]",
         VERDICT_STYLES[verdictType],
         className
       )}

@@ -106,9 +106,15 @@ class StrategyPerformanceTracker:
     def _aggregate(trades: list[TradeEntry]) -> dict:
         if not trades:
             return {
-                "total_trades": 0, "win_rate": 0, "total_pnl_dollars": 0,
-                "total_pnl_pct": 0, "avg_win_pct": 0, "avg_loss_pct": 0,
-                "profit_factor": 0, "sharpe_ratio": 0, "max_drawdown_pct": 0,
+                "total_trades": 0,
+                "win_rate": 0,
+                "total_pnl_dollars": 0,
+                "total_pnl_pct": 0,
+                "avg_win_pct": 0,
+                "avg_loss_pct": 0,
+                "profit_factor": 0,
+                "sharpe_ratio": 0,
+                "max_drawdown_pct": 0,
             }
 
         wins = [t for t in trades if t.pnl_percent and t.pnl_percent > 0]

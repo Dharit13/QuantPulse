@@ -130,11 +130,7 @@ def check_new_position_correlation(
         }
 
     new_row = corr_matrix.loc[new_ticker]
-    pairwise = {
-        t: round(float(new_row[t]), 4)
-        for t in existing_tickers
-        if t in new_row.index and t != new_ticker
-    }
+    pairwise = {t: round(float(new_row[t]), 4) for t in existing_tickers if t in new_row.index and t != new_ticker}
 
     if not pairwise:
         return {
@@ -194,7 +190,7 @@ def detect_correlation_clusters(
 
         avail_list = sorted(available)
         for i, t1 in enumerate(avail_list):
-            for t2 in avail_list[i + 1:]:
+            for t2 in avail_list[i + 1 :]:
                 if t1 in corr_matrix.index and t2 in corr_matrix.columns:
                     c = abs(float(corr_matrix.loc[t1, t2]))
                     if c > best_corr:
@@ -210,11 +206,9 @@ def detect_correlation_clusters(
         for t in sorted(available):
             if t not in corr_matrix.index:
                 continue
-            avg_corr_to_cluster = float(np.mean([
-                abs(float(corr_matrix.loc[t, ct]))
-                for ct in cluster
-                if ct in corr_matrix.columns
-            ]))
+            avg_corr_to_cluster = float(
+                np.mean([abs(float(corr_matrix.loc[t, ct])) for ct in cluster if ct in corr_matrix.columns])
+            )
             if avg_corr_to_cluster >= threshold:
                 cluster.append(t)
                 available.discard(t)
@@ -266,16 +260,18 @@ def get_portfolio_correlation_report(
     # Find pairs exceeding the hard limit
     flagged_pairs: list[dict] = []
     for i, t1 in enumerate(tickers):
-        for t2 in tickers[i + 1:]:
+        for t2 in tickers[i + 1 :]:
             if t1 in corr_matrix.index and t2 in corr_matrix.columns:
                 c = float(corr_matrix.loc[t1, t2])
                 if abs(c) > REJECTION_THRESHOLD:
-                    flagged_pairs.append({
-                        "ticker_a": t1,
-                        "ticker_b": t2,
-                        "correlation": round(c, 4),
-                        "action": "reduce_one",
-                    })
+                    flagged_pairs.append(
+                        {
+                            "ticker_a": t1,
+                            "ticker_b": t2,
+                            "correlation": round(c, 4),
+                            "action": "reduce_one",
+                        }
+                    )
 
     # Classification
     if avg_corr > 0.6:
@@ -292,9 +288,5 @@ def get_portfolio_correlation_report(
         "n_clusters": len(clusters),
         "clusters": clusters,
         "flagged_pairs": flagged_pairs,
-        "risk_level": (
-            "high" if avg_corr > 0.6
-            else "moderate" if avg_corr > 0.4
-            else "low"
-        ),
+        "risk_level": ("high" if avg_corr > 0.6 else "moderate" if avg_corr > 0.4 else "low"),
     }

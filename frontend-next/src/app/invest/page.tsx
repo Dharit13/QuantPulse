@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { PulseLoader, PulseInline } from "@/components/pulse-loader";
 import { PageHeader } from "@/components/page-header";
 import { AICard } from "@/components/ai-card";
 import { MetricCard } from "@/components/metric-card";
-import { usePortfolioScan } from "@/context/scan-context";
 import { CacheAge } from "@/components/cache-age";
-import { apiPost } from "@/lib/api";
+import { useSSEScan } from "@/hooks/use-sse-scan";
 import { formatDollar } from "@/lib/utils";
 
 interface InvestPick {
@@ -50,54 +49,24 @@ interface PortfolioResult {
 
 const PRESET_AMOUNTS = [500, 1000, 2500, 5000, 10000, 25000];
 
-// Module-level store so AI results survive navigation
-let _aiResult: InvestResult | null = null;
-let _aiLoading = false;
-let _lastCapital = 0;
-
 export default function InvestPage() {
-  const scan = usePortfolioScan<PortfolioResult>();
+  const scan = useSSEScan<PortfolioResult>(
+    "portfolio",
+    "/portfolio/quick-allocate/stream",
+    "/portfolio/quick-allocate/status",
+  );
   const [capital, setCapital] = useState(1000);
-  const [aiResult, setAiResult] = useState<InvestResult | null>(_aiResult);
-  const [aiLoading, setAiLoading] = useState(_aiLoading);
 
   const picks = scan.result?.picks ?? [];
+  const aiResult = scan.aiSummary as InvestResult | null;
   const pct = scan.total > 0 ? Math.round((scan.progress / scan.total) * 100) : 0;
 
-  // When scan finishes, auto-trigger AI research
-  useEffect(() => {
-    if (scan.status !== "done" || !scan.result || picks.length === 0) return;
-    if (_aiResult && _lastCapital === capital) return;
-    if (_aiLoading) return;
-
-    _aiLoading = true;
-    setAiLoading(true);
-
-    (async () => {
-      const res = await apiPost<{ result: InvestResult }>("/ai/summarize", {
-        type: "investment_research",
-        data: {
-          regime: scan.result!.regime,
-          capital,
-          picks: picks.slice(0, 3),
-        },
-      });
-      const result = res?.result ?? null;
-      _aiResult = result;
-      _aiLoading = false;
-      _lastCapital = capital;
-      setAiResult(result);
-      setAiLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scan.status]);
+  const priceMap: Record<string, number> = {};
+  for (const p of picks) {
+    priceMap[p.ticker] = p.price;
+  }
 
   const startResearch = useCallback(() => {
-    _aiResult = null;
-    _aiLoading = false;
-    _lastCapital = 0;
-    setAiResult(null);
-    setAiLoading(false);
     scan.start("/portfolio/quick-allocate/start", { capital });
   }, [capital, scan]);
 
@@ -173,28 +142,26 @@ export default function InvestPage() {
             </button>
           </div>
           <div className="flex items-center gap-2">
-            {scan.status === "done" && scan.resultTimestamp && !scan.isLoading && !aiLoading && (
+            {scan.status === "done" && scan.resultTimestamp && !scan.isLoading && (
               <CacheAge timestamp={scan.resultTimestamp} />
             )}
             <button
               onClick={startResearch}
-              disabled={scan.isLoading || aiLoading || capital < 100}
+              disabled={scan.isLoading || capital < 100}
               className="flex items-center gap-2 px-6 py-2.5 bg-accent text-white rounded-xl text-sm font-semibold hover:bg-accent-light transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {(scan.isLoading || aiLoading) && <PulseInline />}
+              {scan.isLoading && <PulseInline />}
               {scan.isLoading
-                ? "Scanning..."
-                : aiLoading
-                  ? "AI Researching..."
-                  : aiResult
-                    ? "Refresh Picks"
-                    : "Find My Top 3 Picks"}
+                ? "Researching..."
+                : aiResult
+                  ? "Refresh Picks"
+                  : "Find My Top 3 Picks"}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Scanning Progress */}
+      {/* Scanning / AI Progress */}
       {scan.status === "scanning" && (
         <div
           className="bg-card border border-border rounded-2xl px-8 py-10 text-center mb-6"
@@ -202,29 +169,25 @@ export default function InvestPage() {
         >
           <PulseLoader
             size="lg"
-            label={`Scanning markets... ${pct}%`}
+            label={`Finding your top picks... ${pct}%`}
             progress={pct}
             sublabel={scan.step || "Analyzing sectors, signals, and fundamentals to find the best opportunities."}
           />
         </div>
       )}
 
-      {/* AI Loading */}
-      {aiLoading && scan.status !== "scanning" && (
-        <div
-          className="bg-card border border-border rounded-2xl px-8 py-10 text-center mb-6"
-          style={{ boxShadow: "var(--shadow-card)" }}
-        >
-          <PulseLoader
-            size="lg"
-            label="AI building your investment plan..."
-            sublabel={`Creating personalized research for ${formatDollar(capital, 0)} across your top 3 picks. This takes 15-30 seconds.`}
-          />
+      {/* Error */}
+      {scan.status === "error" && (
+        <div className="bg-qp-red-bg border border-qp-red/15 rounded-2xl px-8 py-6 text-center mb-6">
+          <div className="text-[15px] font-semibold text-qp-red mb-1">
+            Research failed
+          </div>
+          <p className="text-[13px] text-text-muted">{scan.error}</p>
         </div>
       )}
 
       {/* Results */}
-      {aiResult && (
+      {scan.status === "done" && aiResult && (
         <>
           {/* Market Context */}
           {aiResult.market_context && (
@@ -247,6 +210,7 @@ export default function InvestPage() {
 
           {aiResult.picks.map((p) => {
             const color = rankColors[(p.rank - 1) % 3];
+            const currentPrice = priceMap[p.ticker];
             return (
               <div
                 key={p.ticker}
@@ -272,6 +236,11 @@ export default function InvestPage() {
                     {p.company_name && (
                       <span className="text-[13px] text-text-muted ml-2">
                         {p.company_name}
+                      </span>
+                    )}
+                    {currentPrice != null && currentPrice > 0 && (
+                      <span className="text-[14px] font-mono font-semibold text-text-primary ml-3">
+                        {formatDollar(currentPrice)}
                       </span>
                     )}
                   </div>
@@ -335,8 +304,21 @@ export default function InvestPage() {
         </>
       )}
 
+      {/* Done but no AI result (picks found but AI failed) */}
+      {scan.status === "done" && !aiResult && picks.length > 0 && (
+        <div
+          className="bg-card border border-border rounded-2xl px-8 py-10 text-center"
+          style={{ boxShadow: "var(--shadow-card)" }}
+        >
+          <p className="text-text-secondary text-sm">
+            Found {picks.length} stocks but AI research could not be generated.
+            Try refreshing.
+          </p>
+        </div>
+      )}
+
       {/* No picks found */}
-      {scan.status === "done" && picks.length === 0 && !aiLoading && (
+      {scan.status === "done" && picks.length === 0 && (
         <div
           className="bg-card border border-border rounded-2xl px-8 py-10 text-center"
           style={{ boxShadow: "var(--shadow-card)" }}
@@ -349,7 +331,7 @@ export default function InvestPage() {
       )}
 
       {/* Idle state */}
-      {scan.status === "idle" && !aiResult && (
+      {scan.status === "idle" && (
         <div
           className="bg-card border border-border rounded-2xl px-8 py-10"
           style={{
