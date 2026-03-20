@@ -258,7 +258,9 @@ class SteadyAPISource:
             logger.exception("SteadyAPI unusual-activity unexpected error")
 
         all_records.sort(key=lambda r: r["vol_oi_ratio"], reverse=True)
-        logger.info("SteadyAPI: fetched %d unusual activity records (vol/OI >= %.1f)", len(all_records), min_vol_oi_ratio)
+        logger.info(
+            "SteadyAPI: fetched %d unusual activity records (vol/OI >= %.1f)", len(all_records), min_vol_oi_ratio
+        )
         return all_records
 
     def get_flow_for_ticker(
@@ -331,7 +333,6 @@ class SteadyAPISource:
             "total_records": len(flow),
         }
 
-
     # ── Stock Market API (Starter plan) ────────────────────────
 
     def get_short_interest(self, ticker: str) -> list[dict]:
@@ -353,12 +354,14 @@ class SteadyAPISource:
 
             records: list[dict] = []
             for item in body:
-                records.append({
-                    "settlement_date": item.get("settlementDate", ""),
-                    "short_interest": _parse_int(item.get("interest", "")),
-                    "avg_daily_volume": _parse_int(item.get("avgDailyShareVolume", "")),
-                    "days_to_cover": float(item.get("daysToCover", 0) or 0),
-                })
+                records.append(
+                    {
+                        "settlement_date": item.get("settlementDate", ""),
+                        "short_interest": _parse_int(item.get("interest", "")),
+                        "avg_daily_volume": _parse_int(item.get("avgDailyShareVolume", "")),
+                        "days_to_cover": float(item.get("daysToCover", 0) or 0),
+                    }
+                )
             return records
         except httpx.HTTPStatusError as exc:
             logger.error("SteadyAPI short-interest HTTP error for %s: %s", ticker, exc)
@@ -399,8 +402,7 @@ class SteadyAPISource:
             }
 
             for row in active_rows:
-                key = (row.get("positions", "")
-                       .lower().replace(" ", "_"))
+                key = row.get("positions", "").lower().replace(" ", "_")
                 if key:
                     summary["active_positions"][key] = {
                         "holders": _parse_int(row.get("holders", "")),
@@ -408,8 +410,7 @@ class SteadyAPISource:
                     }
 
             for row in new_sold_rows:
-                key = (row.get("positions", "")
-                       .lower().replace(" ", "_"))
+                key = row.get("positions", "").lower().replace(" ", "_")
                 if key:
                     summary["new_sold_positions"][key] = {
                         "holders": _parse_int(row.get("holders", "")),
@@ -417,14 +418,16 @@ class SteadyAPISource:
                     }
 
             for row in top_holders_rows[:10]:
-                summary["top_holders"].append({
-                    "name": row.get("ownerName", ""),
-                    "date": row.get("date", ""),
-                    "shares_held": _parse_int(row.get("sharesHeld", "")),
-                    "shares_change": _parse_int(row.get("sharesChange", "")),
-                    "change_pct": row.get("sharesChangePCT", ""),
-                    "market_value_k": row.get("marketValue", ""),
-                })
+                summary["top_holders"].append(
+                    {
+                        "name": row.get("ownerName", ""),
+                        "date": row.get("date", ""),
+                        "shares_held": _parse_int(row.get("sharesHeld", "")),
+                        "shares_change": _parse_int(row.get("sharesChange", "")),
+                        "change_pct": row.get("sharesChangePCT", ""),
+                        "market_value_k": row.get("marketValue", ""),
+                    }
+                )
 
             return summary
         except httpx.HTTPStatusError as exc:

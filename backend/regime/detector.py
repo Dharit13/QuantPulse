@@ -8,8 +8,7 @@ import logging
 
 import pandas as pd
 
-from backend.adaptive.vol_context import VolContext
-from backend.adaptive.weight_interpolation import STRATEGY_WEIGHTS, compute_blended_weights
+from backend.adaptive.weight_interpolation import compute_blended_weights
 from backend.models.schemas import Regime
 from backend.regime.indicators import (
     compute_adx_indicator,

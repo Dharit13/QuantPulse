@@ -165,9 +165,7 @@ def compute_portfolio_var(
     if min_len < 20:
         return _empty_portfolio_var()
 
-    aligned = pd.DataFrame(
-        {t: position_returns[t].iloc[-min_len:].values for t in tickers}
-    )
+    aligned = pd.DataFrame({t: position_returns[t].iloc[-min_len:].values for t in tickers})
     aligned = aligned.dropna()
 
     if aligned.empty:

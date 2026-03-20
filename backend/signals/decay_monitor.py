@@ -160,9 +160,7 @@ def detect_crowding(
             if min_len < 20:
                 continue
 
-            corr = float(np.corrcoef(
-                strat[-min_len:], etf_returns[-min_len:]
-            )[0, 1])
+            corr = float(np.corrcoef(strat[-min_len:], etf_returns[-min_len:])[0, 1])
 
             if np.isfinite(corr):
                 factor_corrs[factor_name] = round(corr, 4)
@@ -269,11 +267,13 @@ def compute_signal_half_life(
         cum_return = float(np.prod(1 + window_returns) - 1)
         daily_sharpe = compute_rolling_sharpe(window_returns, window=len(window_returns))
 
-        curve.append({
-            "days": end,
-            "cumulative_return": round(cum_return, 6),
-            "sharpe": round(daily_sharpe, 3),
-        })
+        curve.append(
+            {
+                "days": end,
+                "cumulative_return": round(cum_return, 6),
+                "sharpe": round(daily_sharpe, 3),
+            }
+        )
 
         if cum_return > peak_return:
             peak_return = cum_return
@@ -311,8 +311,7 @@ def _classify_decay(
         return (
             DecayStatus.KILL,
             0.0,
-            "252-day and 90-day Sharpe both negative. "
-            "Disable signal and investigate root cause.",
+            "252-day and 90-day Sharpe both negative. Disable signal and investigate root cause.",
         )
 
     if sharpe_90d < 0.3:
@@ -327,13 +326,11 @@ def _classify_decay(
         return (
             DecayStatus.WARNING,
             0.75,
-            f"30-day Sharpe={sharpe_30d:.2f} below 0.5. "
-            f"Signal may be decaying. Monitor closely, reduce by 25%.",
+            f"30-day Sharpe={sharpe_30d:.2f} below 0.5. Signal may be decaying. Monitor closely, reduce by 25%.",
         )
 
     return (
         DecayStatus.HEALTHY,
         1.0,
-        f"All rolling Sharpe windows healthy "
-        f"(30d={sharpe_30d:.2f}, 90d={sharpe_90d:.2f}, 252d={sharpe_252d:.2f}).",
+        f"All rolling Sharpe windows healthy (30d={sharpe_30d:.2f}, 90d={sharpe_90d:.2f}, 252d={sharpe_252d:.2f}).",
     )

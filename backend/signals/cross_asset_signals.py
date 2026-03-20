@@ -11,6 +11,7 @@ Reference: QUANTPULSE_FINAL_SPEC.md §6 — Cross-Asset Regime Momentum
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -18,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from backend.adaptive.vol_context import VolContext
-from backend.data.cross_asset import SECTOR_ETFS, CrossAssetData, cross_asset_data
+from backend.data.cross_asset import SECTOR_ETFS, cross_asset_data
 
 logger = logging.getLogger(__name__)
 
@@ -493,7 +494,7 @@ def scan_all_cross_asset_signals(
         logger.warning("No cross-asset data available")
         return []
 
-    all_signal_fns: list[tuple[str, callable]] = [
+    all_signal_fns: list[tuple[str, Callable]] = [
         ("yield_10y", lambda: compute_yield_signal(data)),
         ("yield_curve", lambda: compute_yield_curve_signal(data)),
         ("vix_term", lambda: compute_vix_term_signal(data)),

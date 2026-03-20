@@ -19,7 +19,6 @@ from backend.data.fetcher import data_fetcher
 from backend.data.universe import get_sub_industry_groups
 from backend.models.schemas import StrategyName, TradeSignal
 from backend.signals.cointegration import (
-    compute_half_life,
     compute_hurst_exponent,
     compute_spread,
     compute_zscore,
@@ -96,20 +95,22 @@ class StatArbStrategy(BaseStrategy):
 
                 if result["is_valid"]:
                     spread = compute_spread(s1["Close"], s2["Close"])
-                    valid_pairs.append({
-                        "ticker_a": t1,
-                        "ticker_b": t2,
-                        "sub_industry": sub_industry,
-                        "half_life": result["half_life"],
-                        "hurst": result["hurst_exponent"],
-                        "adf_pvalue": result["adf"]["pvalue"],
-                        "eg_pvalue": result["engle_granger"]["pvalue"],
-                        "johansen_cointegrated": result["johansen"]["is_cointegrated"],
-                        "tests_passed": result["tests_passed"],
-                        "correlation_252d": corr,
-                        "spread_mean": result["spread_stats"]["mean"],
-                        "spread_std": result["spread_stats"]["std"],
-                    })
+                    valid_pairs.append(
+                        {
+                            "ticker_a": t1,
+                            "ticker_b": t2,
+                            "sub_industry": sub_industry,
+                            "half_life": result["half_life"],
+                            "hurst": result["hurst_exponent"],
+                            "adf_pvalue": result["adf"]["pvalue"],
+                            "eg_pvalue": result["engle_granger"]["pvalue"],
+                            "johansen_cointegrated": result["johansen"]["is_cointegrated"],
+                            "tests_passed": result["tests_passed"],
+                            "correlation_252d": corr,
+                            "spread_mean": result["spread_stats"]["mean"],
+                            "spread_std": result["spread_stats"]["std"],
+                        }
+                    )
                     pairs_found += 1
 
             logger.info("Sub-industry %s: found %d pairs from %d tickers", sub_industry, pairs_found, len(tickers))
@@ -166,7 +167,10 @@ class StatArbStrategy(BaseStrategy):
         if current_hurst >= HURST_DECAY_THRESHOLD:
             logger.info(
                 "Pair %s/%s skipped: Hurst=%.2f (>= %.2f, trending)",
-                t1, t2, current_hurst, HURST_DECAY_THRESHOLD,
+                t1,
+                t2,
+                current_hurst,
+                HURST_DECAY_THRESHOLD,
             )
             return None
 
@@ -175,7 +179,10 @@ class StatArbStrategy(BaseStrategy):
         if pair_sharpe < SHARPE_PAUSE_THRESHOLD:
             logger.info(
                 "Pair %s/%s paused: 60d Sharpe=%.2f < %.2f",
-                t1, t2, pair_sharpe, SHARPE_PAUSE_THRESHOLD,
+                t1,
+                t2,
+                pair_sharpe,
+                SHARPE_PAUSE_THRESHOLD,
             )
             self.paused_pairs[pair_key] = 5
             return None
@@ -253,10 +260,7 @@ class StatArbStrategy(BaseStrategy):
                 f"half-life={pair['half_life']:.1f}d, Hurst={pair['hurst']:.2f}. "
                 f"Exit when |z| < {exit_z:.2f} (spread normalizes)"
             ),
-            kill_condition=(
-                f"Spread exceeds {stop_z:.1f}σ (cointegration breaking) "
-                f"or Hurst > 0.5 on revalidation"
-            ),
+            kill_condition=(f"Spread exceeds {stop_z:.1f}σ (cointegration breaking) or Hurst > 0.5 on revalidation"),
             expected_sharpe=1.5,
             signal_score=min(100, conviction * 100),
         )
@@ -304,11 +308,14 @@ class StatArbStrategy(BaseStrategy):
         low = df["Low"].tail(period)
         prev_close = df["Close"].shift(1).tail(period)
 
-        tr = pd.concat([
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ], axis=1).max(axis=1)
+        tr = pd.concat(
+            [
+                high - low,
+                (high - prev_close).abs(),
+                (low - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
 
         return float(tr.mean())
 

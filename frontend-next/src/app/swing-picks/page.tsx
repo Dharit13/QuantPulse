@@ -1,15 +1,13 @@
 "use client";
 
 import { PulseLoader, PulseInline } from "@/components/pulse-loader";
-import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { AICard } from "@/components/ai-card";
 import { TradeCard } from "@/components/trade-card";
-import { useSwingScan } from "@/context/scan-context";
 import { CacheAge } from "@/components/cache-age";
-import { apiGet, apiPost } from "@/lib/api";
+import { useSSEScan } from "@/hooks/use-sse-scan";
 import { formatDollar } from "@/lib/utils";
-import type { AIResult, RegimeData, BadgeVariant } from "@/lib/types";
+import type { BadgeVariant } from "@/lib/types";
 
 interface SwingResult {
   quick_trades: SwingTrade[];
@@ -19,6 +17,8 @@ interface SwingResult {
 
 interface SwingTrade {
   ticker: string;
+  name?: string;
+  sector?: string;
   price: number;
   direction: string;
   entry: number;
@@ -32,12 +32,21 @@ interface SwingTrade {
   risk_level: string;
   catalyst?: string;
   analysis?: string;
+  rsi?: number;
+  volume_ratio?: number;
+  atr_pct?: number;
+  ret_1d?: number;
+  ret_5d?: number;
+  analyst_target?: number;
+  earnings_warning?: string;
 }
 
 export default function SwingPicksPage() {
-  const scan = useSwingScan<SwingResult>();
-  const [aiResult, setAiResult] = useState<AIResult["result"] | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
+  const scan = useSSEScan<SwingResult>(
+    "swing",
+    "/swing/stream",
+    "/swing/status",
+  );
 
   const allPicks = [
     ...(scan.result?.quick_trades ?? []),
@@ -47,24 +56,7 @@ export default function SwingPicksPage() {
     .slice(0, 5);
 
   const stats = scan.result?.scan_stats;
-
-  useEffect(() => {
-    if (scan.status !== "done" || allPicks.length === 0) return;
-    setAiLoading(true);
-
-    (async () => {
-      const regime = await apiGet<RegimeData>("/regime/current");
-      const regimeStr = regime?.regime ?? "unknown";
-
-      const res = await apiPost<AIResult>("/ai/summarize", {
-        type: "swing",
-        data: { regime: regimeStr, picks: allPicks },
-      });
-      setAiResult(res?.result ?? null);
-      setAiLoading(false);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scan.status]);
+  const aiResult = scan.aiSummary;
 
   const pct =
     scan.total > 0 ? Math.round((scan.progress / scan.total) * 100) : 0;
@@ -107,7 +99,7 @@ export default function SwingPicksPage() {
             size="lg"
             label={`Scanning for swing trades... ${pct}%`}
             progress={pct}
-            sublabel="Scanning 100+ stocks for aggressive setups targeting 30%+ returns."
+            sublabel={scan.step || "Scanning 100+ stocks for aggressive setups targeting 30%+ returns."}
           />
         </div>
       )}
@@ -150,13 +142,6 @@ export default function SwingPicksPage() {
       {scan.status === "done" && allPicks.length > 0 && (
         <>
           {/* AI Analysis */}
-          {aiLoading && (
-            <div className="flex items-center gap-2 text-text-muted text-sm mb-4">
-              <PulseInline />
-              AI analyzing setups...
-            </div>
-          )}
-
           {aiResult && (
             <AICard title="Swing Analysis" accentColor="#d44040">
               {aiResult.swing_summary_simple && (
@@ -206,41 +191,85 @@ export default function SwingPicksPage() {
             const scoreVariant: BadgeVariant =
               t.score >= 70 ? "green" : t.score >= 50 ? "amber" : "red";
 
+            const badges: Array<{ text: string; variant: BadgeVariant }> = [
+              { text: dir, variant: dirBadge },
+              { text: t.risk_level, variant: riskBadge },
+              { text: `Score ${t.score.toFixed(0)}`, variant: scoreVariant },
+            ];
+            if (t.sector && t.sector !== "Unknown") {
+              badges.push({ text: t.sector, variant: "blue" });
+            }
+            if (t.earnings_warning) {
+              badges.push({ text: "Earnings Soon", variant: "red" });
+            }
+
+            const rsiColor =
+              t.rsi !== undefined
+                ? t.rsi < 35
+                  ? "#2d9d3a"
+                  : t.rsi > 70
+                    ? "#d44040"
+                    : undefined
+                : undefined;
+
+            const tradeStats = [
+              { label: "Entry", value: formatDollar(t.entry) },
+              {
+                label: "Target",
+                value: formatDollar(t.target),
+                color: "#2d9d3a",
+              },
+              {
+                label: "Stop",
+                value: formatDollar(t.stop),
+                color: "#d44040",
+              },
+              { label: "R/R", value: `${t.risk_reward.toFixed(1)}:1` },
+              { label: "Hold", value: `${t.hold_days}d` },
+            ];
+
+            if (t.rsi !== undefined) {
+              tradeStats.push({ label: "RSI", value: t.rsi.toFixed(0), color: rsiColor });
+            }
+            if (t.volume_ratio !== undefined) {
+              tradeStats.push({ label: "Volume", value: `${t.volume_ratio.toFixed(1)}x` });
+            }
+            if (t.atr_pct !== undefined) {
+              tradeStats.push({ label: "ATR%", value: `${t.atr_pct.toFixed(1)}%` });
+            }
+            if (t.ret_1d !== undefined) {
+              tradeStats.push({
+                label: "1D",
+                value: `${t.ret_1d >= 0 ? "+" : ""}${t.ret_1d.toFixed(1)}%`,
+                color: t.ret_1d >= 0 ? "#2d9d3a" : "#d44040",
+              });
+            }
+            if (t.ret_5d !== undefined) {
+              tradeStats.push({
+                label: "5D",
+                value: `${t.ret_5d >= 0 ? "+" : ""}${t.ret_5d.toFixed(1)}%`,
+                color: t.ret_5d >= 0 ? "#2d9d3a" : "#d44040",
+              });
+            }
+
             return (
               <TradeCard
                 key={`${t.ticker}-${i}`}
                 ticker={t.ticker}
+                name={t.name}
                 rank={i + 1}
                 price={t.price}
-                badges={[
-                  { text: dir, variant: dirBadge },
-                  { text: t.risk_level, variant: riskBadge },
-                  { text: `Score ${t.score.toFixed(0)}`, variant: scoreVariant },
-                ]}
+                badges={badges}
                 rightContent={
                   <span className="font-mono text-lg font-bold text-qp-green">
                     +{t.return_pct.toFixed(0)}%
                   </span>
                 }
-                stats={[
-                  { label: "Entry", value: formatDollar(t.entry) },
-                  {
-                    label: "Target",
-                    value: formatDollar(t.target),
-                    color: "#2d9d3a",
-                  },
-                  {
-                    label: "Stop",
-                    value: formatDollar(t.stop),
-                    color: "#d44040",
-                  },
-                  { label: "Reward/Risk", value: `${t.risk_reward.toFixed(1)}:1` },
-                  { label: "Hold", value: `${t.hold_days} trading days` },
-                ]}
+                stats={tradeStats}
                 entrySignal={t.analysis ? {
                   ticker: t.ticker,
                   label: t.catalyst ?? "Setup",
-                  detail: `Could gain +${t.return_pct.toFixed(0)}% · Risk: ${t.risk_level.toLowerCase()} · Hold ${t.hold_days} trading days${t.exit_window ? ` · ${t.exit_window}` : ""}`,
+                  detail: `Could gain +${t.return_pct.toFixed(0)}% · Risk: ${t.risk_level.toLowerCase()} · Hold ${t.hold_days} trading days${t.exit_window ? ` · ${t.exit_window}` : ""}${t.earnings_warning ? ` · ⚠ ${t.earnings_warning}` : ""}`,
                   simple: t.analysis,
                   variant: i === 0 ? "green" : i < 3 ? "blue" : "gray",
                   isAI: false,
@@ -256,8 +285,6 @@ export default function SwingPicksPage() {
               short-term trades. Size small (1-2% of capital max).
             </p>
           )}
-
-          
         </>
       )}
 

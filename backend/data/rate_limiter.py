@@ -232,10 +232,10 @@ rate_limiter = RateLimiter()
 
 # ── Pre-register known sources ──
 rate_limiter.register("steadyapi", tokens_per_second=12, burst=15)  # 15/s limit, slight safety margin
-rate_limiter.register("fmp", tokens_per_second=5, burst=10)           # Starter plan: 300/min → 5/s
-rate_limiter.register("finnhub", tokens_per_second=1, burst=5)      # 60/min
-rate_limiter.register("fred", tokens_per_second=2, burst=5)         # 120/min
-rate_limiter.register("edgar", tokens_per_second=8, burst=10)       # 10/sec SEC policy
-rate_limiter.register("polygon", tokens_per_second=5, burst=10)     # free: unlimited, paid: 100+/s
+rate_limiter.register("fmp", tokens_per_second=5, burst=10)  # Starter plan: 300/min → 5/s
+rate_limiter.register("finnhub", tokens_per_second=1, burst=5)  # 60/min
+rate_limiter.register("fred", tokens_per_second=2, burst=5)  # 120/min
+rate_limiter.register("edgar", tokens_per_second=5, burst=8)  # 10/sec SEC policy, headroom for retries
+rate_limiter.register("polygon", tokens_per_second=5, burst=10)  # free: unlimited, paid: 100+/s
 rate_limiter.register("unusual_whales", tokens_per_second=2, burst=5)  # ~120/min
-rate_limiter.register("finra", tokens_per_second=2, burst=5)        # public data, be polite
+rate_limiter.register("finra", tokens_per_second=2, burst=5)  # public data, be polite

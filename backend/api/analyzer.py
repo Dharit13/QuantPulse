@@ -1,18 +1,24 @@
-"""Single-stock analysis endpoint — full trading cockpit for one ticker."""
+"""Single-stock analysis endpoint — full trading cockpit for one ticker.
+
+Supports both synchronous GET (legacy) and background task + SSE
+for real-time progress tracking.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 
-import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from backend.adaptive.vol_context import compute_vol_context
 from backend.data.fetcher import DataFetcher
-from backend.models.schemas import Regime, StockAnalysis, TradeSignal
+from backend.models.schemas import Regime, TradeSignal
 from backend.regime.detector import detect_regime
 from backend.strategies.catalyst_event import CatalystEventStrategy
 from backend.strategies.cross_asset_momentum import CrossAssetMomentumStrategy
@@ -45,11 +51,14 @@ def _compute_technicals(df: pd.DataFrame) -> dict:
 
     # ATR (14-period)
     prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     atr = float(tr.tail(14).mean())
     atr_pct = atr / current * 100 if current > 0 else 0
 
@@ -127,6 +136,8 @@ def _build_system_take(
     short_interest: list | None = None,
     institutional: dict | None = None,
     dcf: dict | None = None,
+    sentiment: dict | None = None,
+    sentiment_context: str = "",
 ) -> dict:
     """Generate an opinionated system assessment.
 
@@ -134,12 +145,18 @@ def _build_system_take(
     rule-based logic if the API key is missing or the call fails.
     """
     from backend.ai.analyst import ai_system_take
+
     ai_result = ai_system_take(
-        ticker, technicals, fundamentals, regime,
+        ticker,
+        technicals,
+        fundamentals,
+        regime,
         [s.model_dump() if hasattr(s, "model_dump") else s for s in (signals or [])],
         dcf=dcf,
         short_interest=short_interest,
         institutional=institutional,
+        sentiment=sentiment,
+        sentiment_context=sentiment_context,
     )
     if ai_result is not None:
         return ai_result
@@ -264,9 +281,7 @@ def _build_system_take(
 
     score = max(0, min(100, score))
 
-    summary = _build_plain_english_summary(
-        technicals, fundamentals, bias, score, regime
-    )
+    summary = _build_plain_english_summary(technicals, fundamentals, bias, score, regime)
 
     return {
         "bias": bias,
@@ -289,14 +304,10 @@ def _build_plain_english_summary(
     ret_5d = technicals.get("return_5d", 0)
     ret_20d = technicals.get("return_20d", 0)
     rsi = technicals.get("rsi_14", 50)
-    trend = technicals.get("trend", "")
     sma_200 = technicals.get("sma_200") or price
-    vol_ratio = technicals.get("volume_ratio", 1.0)
     atr_pct = technicals.get("atr_pct", 2.0)
-    pct_from_high = technicals.get("pct_from_52w_high", 0)
 
-    analyst_target = (fundamentals.get("analyst_target") or 0)
-    sector = fundamentals.get("sector", "this sector")
+    analyst_target = fundamentals.get("analyst_target") or 0
 
     parts: list[str] = []
 
@@ -314,7 +325,9 @@ def _build_plain_english_summary(
 
     # Why (context from recent trend)
     if ret_5d > 5:
-        parts.append(f"It's been on a tear this week (+{ret_5d:.1f}% in 5 days), so today's move is part of a larger rally.")
+        parts.append(
+            f"It's been on a tear this week (+{ret_5d:.1f}% in 5 days), so today's move is part of a larger rally."
+        )
     elif ret_5d < -5:
         parts.append(f"It's been falling hard this week ({ret_5d:+.1f}% in 5 days), so the selling isn't just today.")
     elif ret_20d > 10:
@@ -324,7 +337,9 @@ def _build_plain_english_summary(
 
     # Regime context
     if "bear" in regime:
-        parts.append("The broader market is in a bear trend right now, which means most stocks face headwinds regardless of their individual story.")
+        parts.append(
+            "The broader market is in a bear trend right now, which means most stocks face headwinds regardless of their individual story."
+        )
     elif "crisis" in regime:
         parts.append("The market is in crisis mode — this is not the time for aggressive bets.")
     elif "bull_trend" in regime:
@@ -351,9 +366,13 @@ def _build_plain_english_summary(
     if analyst_target and price > 0:
         upside = (analyst_target - price) / price * 100
         if upside > 20:
-            parts.append(f"Wall Street analysts have a target of ${analyst_target:.0f}, implying {upside:.0f}% upside from here — they think it goes higher.")
+            parts.append(
+                f"Wall Street analysts have a target of ${analyst_target:.0f}, implying {upside:.0f}% upside from here — they think it goes higher."
+            )
         elif upside < -5:
-            parts.append(f"Analysts target ${analyst_target:.0f}, which is actually below the current price — a warning sign.")
+            parts.append(
+                f"Analysts target ${analyst_target:.0f}, which is actually below the current price — a warning sign."
+            )
 
     # The bottom line
     if score >= 70 and "bullish" in bias:
@@ -401,9 +420,16 @@ def _build_plain_english_summary(
 
 
 def _compute_sell_window(
-    price: float, rsi: float, atr: float, atr_pct: float,
-    sma_20: float, sma_50: float, sma_200: float,
-    resistance: float, ret_20d: float, analyst_target: float,
+    price: float,
+    rsi: float,
+    atr: float,
+    atr_pct: float,
+    sma_20: float,
+    sma_50: float,
+    sma_200: float,
+    resistance: float,
+    ret_20d: float,
+    analyst_target: float,
 ) -> dict:
     """Estimate when to sell before the stock turns down.
 
@@ -512,7 +538,7 @@ def _build_trade_plan(
     sma_20 = technicals.get("sma_20", price)
     sma_50 = technicals.get("sma_50") or price
     rsi = technicals.get("rsi_14", 50)
-    analyst_target = (fundamentals.get("analyst_target") or 0)
+    analyst_target = fundamentals.get("analyst_target") or 0
 
     if price <= 0 or atr <= 0:
         return {"action": "INSUFFICIENT DATA", "reason": "Cannot compute plan without price/ATR data"}
@@ -598,7 +624,7 @@ def _build_trade_plan(
                 time_to_50pct = f"~{months:.0f} months — unlikely from this stock alone, consider options or higher-beta alternatives"
 
     # ── Position sizing: risk-based (risk 2% of capital per trade)
-    RISK_PER_TRADE_PCT = 0.02
+    risk_per_trade_pct = 0.02
     sizing_note = ""
     if entry > 0 and stop > 0:
         risk_per_share = entry - stop
@@ -613,7 +639,7 @@ def _build_trade_plan(
             shares = 0
             sizing_note = "Stop is at or above entry — cannot compute risk-based sizing."
         else:
-            risk_dollars = capital * RISK_PER_TRADE_PCT
+            risk_dollars = capital * risk_per_trade_pct
             shares = int(risk_dollars / risk_per_share)
             if shares < 1:
                 shares = 1 if entry <= capital else 0
@@ -624,7 +650,7 @@ def _build_trade_plan(
                 sizing_note = f"Budget too small for even 1 share at ${entry:,.2f}."
 
             sizing_note = (
-                f"Risking {RISK_PER_TRADE_PCT:.0%} of capital (${risk_dollars:,.0f}) per trade. "
+                f"Risking {risk_per_trade_pct:.0%} of capital (${risk_dollars:,.0f}) per trade. "
                 f"Max loss per share: ${risk_per_share:,.2f}."
             )
 
@@ -645,9 +671,10 @@ def _build_trade_plan(
     # ── Sell window first — it can override the own-it recommendation
     sma_200 = technicals.get("sma_200") or price
     ret_20d = technicals.get("return_20d", 0)
-    ret_60d = technicals.get("return_60d", 0)
 
-    sell_window = _compute_sell_window(price, rsi, atr, atr_pct, sma_20, sma_50, sma_200, resistance, ret_20d, analyst_target)
+    sell_window = _compute_sell_window(
+        price, rsi, atr, atr_pct, sma_20, sma_50, sma_200, resistance, ret_20d, analyst_target
+    )
 
     # Check if strong strategy signals exist (e.g., insider buying)
     _best_signal_score = 0
@@ -694,8 +721,7 @@ def _build_trade_plan(
     elif sell_window["urgency"] == "SOON":
         own_action = "HOLD — PREPARE TO SELL"
         own_reason = (
-            f"Sell signal approaching. {sell_window['reason']} "
-            f"Set a trailing stop at ${round(sma_20, 2)} (20-SMA) now."
+            f"Sell signal approaching. {sell_window['reason']} Set a trailing stop at ${round(sma_20, 2)} (20-SMA) now."
         )
         own_stop = round(sma_20, 2)
         own_target = round(sell_window.get("sell_at", resistance), 2)
@@ -725,10 +751,7 @@ def _build_trade_plan(
         own_target = 0
     elif score < 40:
         own_action = "SELL"
-        own_reason = (
-            f"Weak score ({score}) with no catalyst to reverse. "
-            f"Exit and look for better opportunities."
-        )
+        own_reason = f"Weak score ({score}) with no catalyst to reverse. Exit and look for better opportunities."
         own_stop = 0
         own_target = 0
     elif score >= 45 and price > sma_200:
@@ -742,8 +765,7 @@ def _build_trade_plan(
     else:
         own_action = "HOLD"
         own_reason = (
-            f"No strong signal either way (score {score}). "
-            f"Hold with stop at ${round(support, 2)} and reassess weekly."
+            f"No strong signal either way (score {score}). Hold with stop at ${round(support, 2)} and reassess weekly."
         )
         own_stop = round(support, 2)
         own_target = resistance
@@ -760,7 +782,11 @@ def _build_trade_plan(
     if own_target and own_target > price:
         dist = own_target - price
         days_to_target_raw = max(1, int(dist / (daily_atr * 0.4)))
-        days_to_target = f"~{days_to_target_raw}d" if days_to_target_raw <= 5 else f"~{days_to_target_raw}d ({days_to_target_raw // 5}w)"
+        days_to_target = (
+            f"~{days_to_target_raw}d"
+            if days_to_target_raw <= 5
+            else f"~{days_to_target_raw}d ({days_to_target_raw // 5}w)"
+        )
 
     # Build hold duration for any HOLD recommendation
     hold_duration = ""
@@ -841,6 +867,7 @@ def _get_cached_regime_and_vol() -> tuple | None:
     recomputing it without FRED.
     """
     from backend.data.cache import data_cache
+
     cached = data_cache.get("pipeline:regime")
     if not cached or not isinstance(cached, dict) or "regime" not in cached:
         return None
@@ -891,19 +918,85 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
     short_interest = _fetcher.get_short_interest(ticker)
     institutional = _fetcher.get_institutional_holdings(ticker)
 
+    # Sentiment analysis — try cache first (instant), fall back to live FinBERT
+    sentiment_data: dict | None = None
+    try:
+        from backend.data.sentiment_cache import sentiment_cache
+
+        cached_sent = sentiment_cache.get(ticker)
+        if cached_sent:
+            sentiment_data = {
+                "article_count": cached_sent.article_count,
+                "avg_compound": cached_sent.avg_compound,
+                "pct_positive": 0,
+                "pct_negative": 0,
+                "pct_neutral": 0,
+                "sentiment_label": cached_sent.sentiment_label,
+                "composite_score": cached_sent.composite_score,
+                "strongest_positive": None,
+                "strongest_negative": None,
+            }
+    except Exception:
+        pass
+
+    if sentiment_data is None:
+        try:
+            from backend.signals.sentiment import analyze_ticker_sentiment
+
+            sent = analyze_ticker_sentiment(ticker)
+            sentiment_data = {
+                "article_count": sent.article_count,
+                "avg_compound": sent.avg_compound,
+                "pct_positive": sent.pct_positive,
+                "pct_negative": sent.pct_negative,
+                "pct_neutral": sent.pct_neutral,
+                "sentiment_label": sent.sentiment_label,
+                "composite_score": sent.composite_score,
+                "strongest_positive": sent.strongest_positive,
+                "strongest_negative": sent.strongest_negative,
+            }
+        except Exception as e:
+            logger.debug("Sentiment analysis skipped for %s: %s", ticker, e)
+
+    # Universe sentiment context for AI
+    universe_sentiment_block = ""
+    try:
+        from backend.data.ticker_intelligence import format_sentiment_block, get_universe_sentiment
+
+        univ = get_universe_sentiment()
+        if univ.total_tickers > 0:
+            universe_sentiment_block = format_sentiment_block(univ)
+    except Exception:
+        pass
+
     from backend.signals.dcf import compute_dcf
-    dcf = compute_dcf(ticker, _fetcher)
+
+    dcf = compute_dcf(
+        ticker,
+        _fetcher,
+        sentiment_score=sentiment_data["composite_score"] if sentiment_data else None,
+    )
 
     system_take = _build_system_take(
-        technicals, fundamentals or {}, regime.value,
-        ticker=ticker, signals=signals,
+        technicals,
+        fundamentals or {},
+        regime.value,
+        ticker=ticker,
+        signals=signals,
         short_interest=short_interest,
         institutional=institutional,
         dcf=dcf,
+        sentiment=sentiment_data,
+        sentiment_context=universe_sentiment_block,
     )
 
     trade_plan = _build_trade_plan(
-        ticker, technicals, fundamentals or {}, system_take, regime.value, capital,
+        ticker,
+        technicals,
+        fundamentals or {},
+        system_take,
+        regime.value,
+        capital,
         strategy_signals=signals,
         short_interest=short_interest,
     )
@@ -915,7 +1008,9 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
                 "has_conflict": True,
                 "signal_direction": best_signal.direction,
                 "signal_score": best_signal.signal_score,
-                "signal_strategy": best_signal.strategy.value if hasattr(best_signal.strategy, "value") else str(best_signal.strategy),
+                "signal_strategy": best_signal.strategy.value
+                if hasattr(best_signal.strategy, "value")
+                else str(best_signal.strategy),
                 "signal_edge": best_signal.edge_reason,
                 "note": (
                     f"Technical analysis says '{trade_plan['action']}' (below key SMAs), "
@@ -935,6 +1030,7 @@ def _analyze_sync(ticker: str, capital: float) -> dict:
         "technicals": technicals,
         "fundamentals": fundamentals or {},
         "dcf_valuation": dcf,
+        "sentiment": sentiment_data,
         "short_interest": short_interest[:5] if short_interest else [],
         "institutional_holdings": institutional,
         "system_take": system_take,
@@ -958,6 +1054,7 @@ def _resolve_ticker(raw: str) -> str:
 
     try:
         from backend.data.universe import fetch_sp500_constituents
+
         df = fetch_sp500_constituents()
         if not df.empty:
             sp500_tickers = set(df["ticker"].str.upper())
@@ -975,6 +1072,7 @@ def _resolve_ticker(raw: str) -> str:
 
     try:
         import yfinance as yf
+
         results = yf.Search(cleaned).quotes
         if results:
             first_sym = results[0].get("symbol", upper)
@@ -1006,9 +1104,291 @@ def _resolve_ticker(raw: str) -> str:
     return upper
 
 
+# ── Background analysis + SSE ─────────────────────────────────
+
+_analysis_state: dict = {
+    "status": "idle",
+    "progress": 0,
+    "total": 100,
+    "step": "",
+    "ticker": None,
+    "result": None,
+    "result_timestamp": None,
+    "error": None,
+}
+
+
+def _run_analysis_background(ticker: str, capital: float) -> None:
+    from backend.progress import ScanProgressTracker
+
+    global _analysis_state
+    try:
+        _analysis_state["status"] = "scanning"
+        _analysis_state["error"] = None
+        _analysis_state["ticker"] = ticker
+
+        tracker = ScanProgressTracker.create(
+            [
+                ("data", 5),
+                ("technicals", 3),
+                ("fundamentals", 5),
+                ("signals", 15),
+                ("sentiment", 5),
+                ("dcf", 5),
+                ("trade_plan", 3),
+            ],
+            _analysis_state,
+            "progress:analysis",
+        )
+
+        tracker.start_phase("data", f"Fetching price data for {ticker}...")
+        resolved = _resolve_ticker(ticker)
+        ohlcv = _fetcher.get_daily_ohlcv(resolved, period="2y", live=True)
+        if ohlcv.empty:
+            _analysis_state["status"] = "error"
+            _analysis_state["error"] = f"No data for {resolved}"
+            return
+
+        cached_rv = _get_cached_regime_and_vol()
+        if cached_rv:
+            regime, vol = cached_rv
+        else:
+            vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+            spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
+            regime_result = detect_regime(vix_df, spy_df)
+            regime = regime_result["regime"]
+            vol = compute_vol_context(spy_df, vix_df)
+
+        tracker.start_phase("technicals", "Computing technicals...")
+        technicals = _compute_technicals(ohlcv)
+
+        tracker.start_phase("fundamentals", f"Fetching fundamentals for {resolved}...")
+        fundamentals = _fetcher.get_fundamentals(resolved)
+        short_interest = _fetcher.get_short_interest(resolved)
+        institutional = _fetcher.get_institutional_holdings(resolved)
+
+        tracker.start_phase("signals", "Running strategy signals...")
+        signals: list[TradeSignal] = []
+        try:
+            catalyst = CatalystEventStrategy()
+            cat_signals = catalyst.generate_signals(vol, tickers=[resolved])
+            signals.extend(s for s in cat_signals if s.ticker.upper() == resolved.upper())
+        except Exception as e:
+            logger.debug("Catalyst skipped for %s: %s", resolved, e)
+        try:
+            cross = CrossAssetMomentumStrategy()
+            cross_signals = cross.generate_signals(vol, tickers=[resolved])
+            signals.extend(s for s in cross_signals if s.ticker.upper() == resolved.upper())
+        except Exception as e:
+            logger.debug("CrossAsset skipped for %s: %s", resolved, e)
+
+        tracker.start_phase("sentiment", "Analyzing news sentiment...")
+        sentiment_data: dict | None = None
+
+        # Cache-first: use pre-computed FinBERT from sentiment_cache
+        try:
+            from backend.data.sentiment_cache import sentiment_cache
+
+            cached_sent = sentiment_cache.get(resolved)
+            if cached_sent:
+                sentiment_data = {
+                    "article_count": cached_sent.article_count,
+                    "avg_compound": cached_sent.avg_compound,
+                    "pct_positive": 0,
+                    "pct_negative": 0,
+                    "pct_neutral": 0,
+                    "sentiment_label": cached_sent.sentiment_label,
+                    "composite_score": cached_sent.composite_score,
+                    "strongest_positive": None,
+                    "strongest_negative": None,
+                }
+        except Exception:
+            pass
+
+        if sentiment_data is None:
+            try:
+                from backend.signals.sentiment import analyze_ticker_sentiment
+
+                sent = analyze_ticker_sentiment(resolved)
+                sentiment_data = {
+                    "article_count": sent.article_count,
+                    "avg_compound": sent.avg_compound,
+                    "pct_positive": sent.pct_positive,
+                    "pct_negative": sent.pct_negative,
+                    "pct_neutral": sent.pct_neutral,
+                    "sentiment_label": sent.sentiment_label,
+                    "composite_score": sent.composite_score,
+                    "strongest_positive": sent.strongest_positive,
+                    "strongest_negative": sent.strongest_negative,
+                }
+            except Exception as e:
+                logger.debug("Sentiment analysis skipped for %s: %s", resolved, e)
+
+        # Universe sentiment context for AI
+        universe_sentiment_block = ""
+        try:
+            from backend.data.ticker_intelligence import format_sentiment_block, get_universe_sentiment
+
+            univ = get_universe_sentiment()
+            if univ.total_tickers > 0:
+                universe_sentiment_block = format_sentiment_block(univ)
+        except Exception:
+            pass
+
+        tracker.start_phase("dcf", "Computing DCF valuation...")
+        from backend.signals.dcf import compute_dcf
+
+        dcf = compute_dcf(
+            resolved,
+            _fetcher,
+            sentiment_score=sentiment_data["composite_score"] if sentiment_data else None,
+        )
+
+        tracker.start_phase("trade_plan", "Building trade plan...")
+        system_take = _build_system_take(
+            technicals,
+            fundamentals or {},
+            regime.value,
+            ticker=resolved,
+            signals=signals,
+            short_interest=short_interest,
+            institutional=institutional,
+            dcf=dcf,
+            sentiment=sentiment_data,
+            sentiment_context=universe_sentiment_block,
+        )
+        trade_plan = _build_trade_plan(
+            resolved,
+            technicals,
+            fundamentals or {},
+            system_take,
+            regime.value,
+            capital,
+            strategy_signals=signals,
+            short_interest=short_interest,
+        )
+
+        if signals and trade_plan["action"] in ("AVOID", "HOLD OFF — NO EDGE"):
+            best_signal = max(signals, key=lambda s: s.signal_score or 0)
+            if (best_signal.signal_score or 0) >= 70:
+                trade_plan["signal_override"] = {
+                    "has_conflict": True,
+                    "signal_direction": best_signal.direction,
+                    "signal_score": best_signal.signal_score,
+                    "signal_strategy": best_signal.strategy.value
+                    if hasattr(best_signal.strategy, "value")
+                    else str(best_signal.strategy),
+                    "signal_edge": best_signal.edge_reason,
+                    "note": (
+                        f"Technical analysis says '{trade_plan['action']}' (below key SMAs), "
+                        f"but a strong {best_signal.strategy.value if hasattr(best_signal.strategy, 'value') else best_signal.strategy} signal "
+                        f"(score {best_signal.signal_score:.0f}) suggests a counter-trend "
+                        f"{best_signal.direction} trade. This is a higher-risk contrarian setup — "
+                        f"use smaller sizing (half-Kelly) and tighter stops."
+                    ),
+                }
+
+        tracker.finish()
+        tracker.save_history("progress:analysis")
+
+        result = {
+            "ticker": resolved,
+            "current_price": technicals["current_price"],
+            "sector": (fundamentals or {}).get("sector", "Unknown"),
+            "regime": regime.value,
+            "signals": [s.model_dump() for s in signals],
+            "technicals": technicals,
+            "fundamentals": fundamentals or {},
+            "dcf_valuation": dcf,
+            "sentiment": sentiment_data,
+            "short_interest": short_interest[:5] if short_interest else [],
+            "institutional_holdings": institutional,
+            "system_take": system_take,
+            "trade_plan": trade_plan,
+        }
+        if resolved != ticker.upper():
+            result["resolved_from"] = ticker
+
+        _analysis_state["result"] = result
+        _analysis_state["result_timestamp"] = datetime.now(UTC).isoformat()
+        _analysis_state["status"] = "done"
+        logger.info("Background analysis done for %s", resolved)
+    except Exception as e:
+        _analysis_state["status"] = "error"
+        _analysis_state["error"] = str(e)
+        logger.exception("Background analysis failed for %s", ticker)
+
+
+@router.post("/start")
+async def start_analysis(
+    ticker: str = Query(...),
+    capital: float = Query(default=10000, ge=1),
+) -> dict:
+    if _analysis_state["status"] == "scanning":
+        return {"status": "already_scanning", "ticker": _analysis_state.get("ticker")}
+    _analysis_state["status"] = "scanning"
+    _analysis_state["progress"] = 0
+    _analysis_state["result"] = None
+    _analysis_state["ticker"] = ticker
+    _executor.submit(_run_analysis_background, ticker, capital)
+    return {"status": "started"}
+
+
+@router.get("/status")
+async def get_analysis_status() -> dict:
+    return {
+        "status": _analysis_state["status"],
+        "progress": _analysis_state["progress"],
+        "total": _analysis_state["total"],
+        "step": _analysis_state.get("step", ""),
+        "ticker": _analysis_state.get("ticker"),
+        "result": _analysis_state["result"] if _analysis_state["status"] == "done" else None,
+        "result_timestamp": _analysis_state.get("result_timestamp"),
+        "error": _analysis_state["error"],
+    }
+
+
+@router.get("/stream")
+async def stream_analysis():
+    async def _event_stream():
+        prev = ""
+        while True:
+            snap = {
+                "status": _analysis_state["status"],
+                "progress": _analysis_state["progress"],
+                "total": _analysis_state["total"],
+                "step": _analysis_state.get("step", ""),
+                "ticker": _analysis_state.get("ticker"),
+                "error": _analysis_state["error"],
+            }
+            enc = json.dumps(snap, default=str)
+
+            if _analysis_state["status"] == "done":
+                snap["result"] = _analysis_state["result"]
+                snap["result_timestamp"] = _analysis_state.get("result_timestamp")
+                yield f"data: {json.dumps(snap, default=str)}\n\n"
+                return
+            if _analysis_state["status"] == "error":
+                yield f"data: {enc}\n\n"
+                return
+            if _analysis_state["status"] == "idle":
+                yield f"data: {enc}\n\n"
+                return
+            if enc != prev:
+                yield f"data: {enc}\n\n"
+                prev = enc
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/{ticker}")
 async def analyze_stock(ticker: str, capital: float = Query(default=10000, ge=1)) -> dict:
-    """Full single-stock analysis with trade plan.
+    """Full single-stock analysis with trade plan (legacy synchronous).
 
     Accepts ticker symbols (NVDA) or company names (NVIDIA).
     """

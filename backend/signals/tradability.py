@@ -61,10 +61,7 @@ def check_tradability(
     pct_adv = position_dollars / dollar_volume if dollar_volume > 0 else 1.0
 
     if pct_adv > MAX_ADV_PCT:
-        reasons.append(
-            f"Position uses {pct_adv:.1%} of ADV (limit {MAX_ADV_PCT:.0%}) — "
-            f"would move the market"
-        )
+        reasons.append(f"Position uses {pct_adv:.1%} of ADV (limit {MAX_ADV_PCT:.0%}) — would move the market")
         passed = False
 
     # Slippage estimate: scales up when position is larger fraction of volume
@@ -76,6 +73,7 @@ def check_tradability(
     if signal.direction == "short":
         try:
             from backend.data.universe import fetch_sp500_constituents
+
             sp500 = fetch_sp500_constituents()
             is_sp500 = signal.ticker in sp500["ticker"].values
         except Exception:
@@ -83,9 +81,7 @@ def check_tradability(
 
         if not is_sp500:
             borrow_available = False
-            reasons.append(
-                f"{signal.ticker} is not in S&P 500 — borrow availability uncertain"
-            )
+            reasons.append(f"{signal.ticker} is not in S&P 500 — borrow availability uncertain")
 
     # Spread check via ATR%
     close = df["Close"]
@@ -93,20 +89,21 @@ def check_tradability(
     low = df["Low"].tail(14)
     prev_close = close.shift(1).tail(14)
     import pandas as pd
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     atr = float(tr.mean())
     atr_pct = atr / price if price > 0 else 0
 
     spread_acceptable = atr_pct < WIDE_SPREAD_ATR_PCT
     if not spread_acceptable:
-        reasons.append(
-            f"ATR% is {atr_pct:.1%} (>{WIDE_SPREAD_ATR_PCT:.0%}) — "
-            f"wide spread risk, fills may be poor"
-        )
+        reasons.append(f"ATR% is {atr_pct:.1%} (>{WIDE_SPREAD_ATR_PCT:.0%}) — wide spread risk, fills may be poor")
 
     if reasons and passed:
         passed = borrow_available and spread_acceptable

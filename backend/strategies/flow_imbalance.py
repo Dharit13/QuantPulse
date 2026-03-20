@@ -143,8 +143,10 @@ class FlowImbalanceStrategy(BaseStrategy):
 
             if sym not in ticker_flow:
                 ticker_flow[sym] = {
-                    "call_premium": 0.0, "put_premium": 0.0,
-                    "sweep_count": 0, "top_sweeps": [],
+                    "call_premium": 0.0,
+                    "put_premium": 0.0,
+                    "sweep_count": 0,
+                    "top_sweeps": [],
                 }
             entry = ticker_flow[sym]
             entry["sweep_count"] += 1

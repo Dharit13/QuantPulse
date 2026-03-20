@@ -7,7 +7,7 @@ Rules:
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from backend.adaptive.vol_context import VolContext
 from backend.adaptive.weight_interpolation import compute_regime_transition_weights
@@ -25,7 +25,7 @@ TRANSITION_SPEEDS = {
     ("bull_choppy", "bear_trend"): 0.5,
     ("bear_trend", "bull_trend"): 0.2,
     ("bear_trend", "bull_choppy"): 0.2,
-    ("crisis", "bull_trend"): 0.1,      # Slow recovery
+    ("crisis", "bull_trend"): 0.1,  # Slow recovery
     ("crisis", "bull_choppy"): 0.1,
     ("crisis", "bear_trend"): 0.2,
     ("crisis", "mean_reverting"): 0.15,
@@ -41,10 +41,14 @@ class RegimeTracker:
         self.candidate_regime: Regime | None = None
         self.candidate_days: int = 0
         self.current_weights: dict[str, float] = {
-            "stat_arb": 0.20, "catalyst": 0.20, "momentum": 0.20,
-            "flow": 0.15, "intraday": 0.15, "cash": 0.10,
+            "stat_arb": 0.20,
+            "catalyst": 0.20,
+            "momentum": 0.20,
+            "flow": 0.15,
+            "intraday": 0.15,
+            "cash": 0.10,
         }
-        self.regime_start: datetime = datetime.now(timezone.utc)
+        self.regime_start: datetime = datetime.now(UTC)
         self.history: list[dict] = []
 
     def update(
@@ -90,17 +94,19 @@ class RegimeTracker:
             "candidate_regime": self.candidate_regime,
             "candidate_days": self.candidate_days,
             "current_weights": self.current_weights,
-            "days_in_regime": (datetime.now(timezone.utc) - self.regime_start).days,
+            "days_in_regime": (datetime.now(UTC) - self.regime_start).days,
         }
 
     def _switch_regime(self, new_regime: Regime) -> None:
-        self.history.append({
-            "from": self.current_regime.value,
-            "to": new_regime.value,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self.history.append(
+            {
+                "from": self.current_regime.value,
+                "to": new_regime.value,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         logger.info("Regime switch: %s -> %s", self.current_regime.value, new_regime.value)
         self.current_regime = new_regime
         self.candidate_regime = None
         self.candidate_days = 0
-        self.regime_start = datetime.now(timezone.utc)
+        self.regime_start = datetime.now(UTC)

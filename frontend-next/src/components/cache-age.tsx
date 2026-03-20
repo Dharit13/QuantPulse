@@ -7,8 +7,9 @@ interface CacheAgeProps {
   className?: string;
 }
 
-function formatAge(isoTimestamp: string): string {
+function formatAge(isoTimestamp: string): string | null {
   const then = new Date(isoTimestamp + (isoTimestamp.endsWith("Z") ? "" : "Z"));
+  if (isNaN(then.getTime())) return null;
   const diffMs = Date.now() - then.getTime();
   const diffMin = Math.floor(diffMs / 60_000);
 

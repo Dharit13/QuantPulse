@@ -8,7 +8,7 @@ keeping response times instant.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.adaptive.vol_context import VolContext, compute_vol_context
 from backend.config import settings
@@ -19,9 +19,9 @@ from backend.regime.detector import detect_regime
 
 logger = logging.getLogger(__name__)
 
-TTL_FAST = 0.05       # 3 min — for 2-min refresh cycle (stocks, regime, portfolio)
-TTL_MEDIUM = 0.25     # 15 min — for 10-min refresh cycle (scanner, sectors, swing, flow)
-TTL_DAILY = 12.0      # 12 hours — for daily data (earnings calendar)
+TTL_FAST = 0.05  # 3 min — for 2-min refresh cycle (stocks, regime, portfolio)
+TTL_MEDIUM = 0.25  # 15 min — for 10-min refresh cycle (scanner, sectors, swing, flow)
+TTL_DAILY = 12.0  # 12 hours — for daily data (earnings calendar)
 
 _fetcher = DataFetcher()
 
@@ -34,8 +34,8 @@ def _fetch_regime_and_vol() -> tuple[Regime, VolContext, dict]:
 
     Returns (regime, vol_context, full_regime_result).
     """
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
+    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
+    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
 
     yield_curve_slope: float | None = None
     credit_spread_ratio: float | None = None
@@ -50,7 +50,8 @@ def _fetch_regime_and_vol() -> tuple[Regime, VolContext, dict]:
         logger.debug("FRED data unavailable for regime detection: %s", e)
 
     regime_result = detect_regime(
-        vix_df, spy_df,
+        vix_df,
+        spy_df,
         yield_curve_slope=yield_curve_slope,
         credit_spread_ratio=credit_spread_ratio,
     )
@@ -71,11 +72,15 @@ def refresh_regime(
 
         indicators = regime_result.get("indicators", {})
         vix_val = indicators.get("vix", {}).get("vix", 18.0) if isinstance(indicators.get("vix"), dict) else 18.0
-        breadth = indicators.get("breadth", {}).get("pct_above_200sma", 50.0) if isinstance(indicators.get("breadth"), dict) else 50.0
+        breadth = (
+            indicators.get("breadth", {}).get("pct_above_200sma", 50.0)
+            if isinstance(indicators.get("breadth"), dict)
+            else 50.0
+        )
         adx = indicators.get("adx", {}).get("adx", 20.0) if isinstance(indicators.get("adx"), dict) else 20.0
 
         payload = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "regime": regime.value,
             "confidence": regime_result["confidence"],
             "regime_probabilities": regime_result["probabilities"],
@@ -83,25 +88,27 @@ def refresh_regime(
             "breadth_pct": breadth,
             "adx": adx,
             "strategy_weights": regime_result.get("strategy_weights", {}),
-            "refreshed_at": datetime.utcnow().isoformat(),
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        from backend.models.database import RegimeRecord, SessionLocal
         import json
+
+        from backend.models.database import get_supabase
+
         try:
-            with SessionLocal() as db:
-                record = RegimeRecord(
-                    timestamp=datetime.utcnow(),
-                    regime=regime.value,
-                    confidence=regime_result["confidence"],
-                    vix=vix_val,
-                    breadth_pct=breadth,
-                    adx=adx,
-                    strategy_weights_json=json.dumps(regime_result.get("strategy_weights", {})),
-                    regime_probabilities_json=json.dumps(regime_result["probabilities"]),
-                )
-                db.add(record)
-                db.commit()
+            sb = get_supabase()
+            sb.table("regimes").insert(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "regime": regime.value,
+                    "confidence": regime_result["confidence"],
+                    "vix": vix_val,
+                    "breadth_pct": breadth,
+                    "adx": adx,
+                    "strategy_weights_json": json.dumps(regime_result.get("strategy_weights", {})),
+                    "regime_probabilities_json": json.dumps(regime_result["probabilities"]),
+                }
+            ).execute()
         except Exception as e:
             logger.warning("Failed to persist regime record: %s", e)
 
@@ -130,15 +137,16 @@ def refresh_scanner(
         enriched = enriched[:10]
 
         from backend.models.schemas import ScannerResult
+
         result = ScannerResult(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             regime=regime,
             signals=enriched,
             total_signals=len(all_signals),
         )
         payload = {
             "data": result.model_dump(mode="json"),
-            "refreshed_at": datetime.utcnow().isoformat(),
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
         }
         data_cache.set("pipeline:scanner", payload, ttl_hours=TTL_MEDIUM)
         logger.info("Pipeline: scanner refreshed — %d signals (of %d total)", len(enriched), len(all_signals))
@@ -156,7 +164,7 @@ def refresh_sectors() -> dict | None:
         result = _analyze_sectors()
         payload = {
             "data": result,
-            "refreshed_at": datetime.utcnow().isoformat(),
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
         }
         data_cache.set("pipeline:sectors", payload, ttl_hours=TTL_MEDIUM)
         logger.info("Pipeline: sectors refreshed — %d sectors", len(result.get("sectors", [])))
@@ -223,7 +231,7 @@ def refresh_portfolio(
                 "total_pnl_ytd": summary.get("total_pnl_dollars", 0),
                 "portfolio_sharpe_30d": 0.0,
             },
-            "refreshed_at": datetime.utcnow().isoformat(),
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
         }
         data_cache.set("pipeline:portfolio", payload, ttl_hours=TTL_FAST)
         logger.info("Pipeline: portfolio refreshed — %d active trades", len(active_entries))
@@ -241,7 +249,7 @@ def refresh_swing() -> dict | None:
         result = _run_swing_scan(min_return_pct=30.0, max_hold_days=10)
         payload = {
             "data": result,
-            "refreshed_at": datetime.utcnow().isoformat(),
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
         }
         data_cache.set("pipeline:swing", payload, ttl_hours=TTL_MEDIUM)
         quick = len(result.get("quick_trades", []))
@@ -274,7 +282,7 @@ def refresh_flow() -> dict | None:
                 "unusual_activity": unusual[:20],
                 "unusual_count": len(unusual),
             },
-            "refreshed_at": datetime.utcnow().isoformat(),
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
         }
         data_cache.set("pipeline:flow", payload, ttl_hours=TTL_MEDIUM)
         logger.info(
@@ -303,7 +311,7 @@ def refresh_earnings_calendar() -> dict | None:
 
         payload = {
             "data": calendar[:30],
-            "refreshed_at": datetime.utcnow().isoformat(),
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
         }
         data_cache.set("pipeline:earnings_calendar", payload, ttl_hours=TTL_DAILY)
         logger.info("Pipeline: earnings calendar refreshed — %d upcoming", len(calendar[:30]))
@@ -316,39 +324,110 @@ def refresh_earnings_calendar() -> dict | None:
 # ── Tiered refresh ───────────────────────────────────────────
 
 
+def refresh_dashboard_ai(regime_payload: dict) -> None:
+    """Pre-compute the 4 AI summaries for the Market Overview dashboard.
+
+    Runs after regime refresh so the dashboard loads instantly.
+    Results are cached keyed by regime fingerprint — only re-generated
+    when the regime actually changes.
+    """
+    import hashlib
+    import json as _json
+
+    fingerprint = {
+        "regime": regime_payload.get("regime", ""),
+        "vix": round(regime_payload.get("vix", 0), 0),
+        "confidence": round(regime_payload.get("confidence", 0), 1),
+    }
+    h = hashlib.md5(_json.dumps(fingerprint, sort_keys=True).encode()).hexdigest()[:8]
+
+    already_cached = data_cache.get(f"ai:market:{h}")
+    if already_cached is not None:
+        logger.debug("Pipeline: dashboard AI already cached for fingerprint %s", h)
+        return
+
+    try:
+        from backend.ai.market_ai import (
+            ai_allocation_explain,
+            ai_market_action_banner,
+            ai_market_summary,
+            ai_regime_probs,
+        )
+
+        ttl = 0.5
+
+        market = ai_market_summary(regime_payload)
+        if market:
+            data_cache.set(f"ai:market:{h}", market, ttl_hours=ttl)
+
+        probs_data = {
+            "probabilities": regime_payload.get("regime_probabilities", {}),
+            "vix": regime_payload.get("vix", 0),
+            "adx": regime_payload.get("adx", 0),
+            "breadth_pct": regime_payload.get("breadth_pct", 0),
+        }
+        probs = ai_regime_probs(probs_data)
+        if probs:
+            probs_h = hashlib.md5(
+                _json.dumps(
+                    {
+                        "regime": probs_data.get("regime", regime_payload.get("regime", "")),
+                        "vix": round(probs_data.get("vix", 0), 0),
+                        "confidence": round(probs_data.get("confidence", regime_payload.get("confidence", 0)), 1),
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()[:8]
+            data_cache.set(f"ai:regime_probs:{probs_h}", probs, ttl_hours=ttl)
+
+        alloc = ai_allocation_explain(regime_payload)
+        if alloc:
+            data_cache.set(f"ai:allocation_explain:{h}", alloc, ttl_hours=ttl)
+
+        action = ai_market_action_banner(regime_payload)
+        if action:
+            data_cache.set(f"ai:market_action:{h}", action, ttl_hours=ttl)
+
+        logger.info("Pipeline: dashboard AI pre-computed (fingerprint=%s)", h)
+    except Exception as e:
+        logger.warning("Pipeline: dashboard AI pre-compute failed: %s", e)
+
+
 def refresh_fast() -> None:
     """Every 2 min: stock prices, regime, portfolio state.
     Fetches VIX/SPY/FRED once and shares across regime + portfolio.
     """
-    started = datetime.utcnow()
+    started = datetime.now(timezone.utc)
     prefetched = _fetch_regime_and_vol()
-    refresh_regime(_prefetched=prefetched)
+    regime_payload = refresh_regime(_prefetched=prefetched)
     refresh_portfolio(_prefetched=prefetched)
-    elapsed = (datetime.utcnow() - started).total_seconds()
-    logger.info("Pipeline[fast]: regime + portfolio in %.1fs", elapsed)
+    if regime_payload:
+        refresh_dashboard_ai(regime_payload)
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    logger.info("Pipeline[fast]: regime + portfolio + dashboard AI in %.1fs", elapsed)
 
 
 def refresh_medium() -> None:
     """Every 10 min: full scanner, sectors, swing picks.
     Fetches VIX/SPY/FRED once and shares across scanner.
     """
-    started = datetime.utcnow()
+    started = datetime.now(timezone.utc)
     prefetched = _fetch_regime_and_vol()
     refresh_scanner(_prefetched=prefetched)
     refresh_sectors()
     refresh_swing()
-    elapsed = (datetime.utcnow() - started).total_seconds()
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
     logger.info("Pipeline[medium]: scanner + sectors + swing in %.1fs", elapsed)
 
 
 def refresh_all() -> None:
     """Run the full pipeline (all tiers). Used on startup."""
-    started = datetime.utcnow()
+    started = datetime.now(timezone.utc)
     logger.info("Pipeline: starting full refresh at %s", started.isoformat())
 
     refresh_fast()
     refresh_medium()
     refresh_earnings_calendar()
 
-    elapsed = (datetime.utcnow() - started).total_seconds()
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
     logger.info("Pipeline: full refresh completed in %.1fs", elapsed)

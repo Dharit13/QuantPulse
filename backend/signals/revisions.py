@@ -47,10 +47,7 @@ def compute_revision_breadth(
         return 0.0
 
     cutoff = date.today() - timedelta(days=window_days)
-    in_window = [
-        r for r in revisions
-        if _to_date(r.get("date")) >= cutoff
-    ]
+    in_window = [r for r in revisions if _to_date(r.get("date")) >= cutoff]
 
     if not in_window:
         in_window = revisions[:2]
@@ -87,10 +84,7 @@ def compute_revision_acceleration(
     cutoff_older = today - timedelta(days=30)
 
     recent = [r for r in revisions if _to_date(r.get("date")) >= cutoff_recent]
-    older = [
-        r for r in revisions
-        if cutoff_older <= _to_date(r.get("date")) < cutoff_recent
-    ]
+    older = [r for r in revisions if cutoff_older <= _to_date(r.get("date")) < cutoff_recent]
 
     if not recent and not older:
         if len(revisions) >= 2:

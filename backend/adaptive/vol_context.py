@@ -13,12 +13,12 @@ import pandas as pd
 
 
 class VolRegime(str, Enum):
-    ULTRA_LOW = "ultra_low"   # VIX < 12
-    LOW = "low"               # VIX 12-16
-    NORMAL = "normal"         # VIX 16-22
-    ELEVATED = "elevated"     # VIX 22-30
-    HIGH = "high"             # VIX 30-45
-    EXTREME = "extreme"       # VIX > 45
+    ULTRA_LOW = "ultra_low"  # VIX < 12
+    LOW = "low"  # VIX 12-16
+    NORMAL = "normal"  # VIX 16-22
+    ELEVATED = "elevated"  # VIX 22-30
+    HIGH = "high"  # VIX 30-45
+    EXTREME = "extreme"  # VIX > 45
 
 
 @dataclass
@@ -128,11 +128,14 @@ def compute_vol_context(
     spy_high = spy_df["High"].tail(14)
     spy_low = spy_df["Low"].tail(14)
     spy_prev_close = spy_close.shift(1).tail(14)
-    tr = pd.concat([
-        spy_high - spy_low,
-        (spy_high - spy_prev_close).abs(),
-        (spy_low - spy_prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr = pd.concat(
+        [
+            spy_high - spy_low,
+            (spy_high - spy_prev_close).abs(),
+            (spy_low - spy_prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     atr_14 = float(tr.mean())
     atr_pct = atr_14 / float(spy_close.iloc[-1]) if spy_close.iloc[-1] > 0 else 0.01
 

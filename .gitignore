@@ -15,6 +15,7 @@ build/
 .venv/
 venv/
 env/
+uv.lock
 
 .DS_Store
 *.swp
@@ -37,3 +38,6 @@ models_cache/
 *.safetensors
 
 backtest_results/
+
+.cursor/skills/
+yfinance.cache

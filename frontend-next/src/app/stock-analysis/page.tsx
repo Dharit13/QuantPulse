@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { PulseLoader, PulseInline } from "@/components/pulse-loader";
 import { PageHeader } from "@/components/page-header";
 import { MetricCard } from "@/components/metric-card";
@@ -53,16 +53,14 @@ function Expandable({
     >
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-card-alt transition-colors"
+        className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-card-alt transition-colors active:scale-[0.99] cursor-pointer"
       >
         <span className="text-[15px] font-semibold text-text-primary">
           {title}
         </span>
-        {open ? (
-          <ChevronDown className="h-4 w-4 text-text-muted" />
-        ) : (
-          <ChevronRight className="h-4 w-4 text-text-muted" />
-        )}
+        <ChevronDown
+          className={`h-4 w-4 text-text-muted transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        />
       </button>
       {open && <div className="px-6 pb-5 pt-0">{children}</div>}
     </div>
@@ -75,11 +73,16 @@ export default function StockAnalysisPage() {
     capital,
     data,
     loading,
+    progress,
+    total,
+    step,
     error,
     setTicker,
     setCapital,
     analyze,
   } = useAnalysis();
+
+  const pct = total > 0 ? Math.round((progress / total) * 100) : 0;
 
   const tech = data?.technicals;
   const fund = data?.fundamentals;
@@ -92,6 +95,7 @@ export default function StockAnalysisPage() {
   const score = take?.score ?? 50;
 
   const dcf = data?.dcf_valuation;
+  const sentiment = data?.sentiment;
 
   const showPlan = plan && plan.entry_price > 0;
 
@@ -129,7 +133,7 @@ export default function StockAnalysisPage() {
           <button
             type="button"
             onClick={() => setCapital((c) => Math.max(50, c - 50))}
-            className="px-3 py-2.5 text-text-muted hover:text-text-primary hover:bg-card-alt transition-colors text-lg font-medium leading-none"
+            className="px-3 py-2.5 text-text-muted hover:text-text-primary hover:bg-card-alt transition-colors active:scale-[0.95] cursor-pointer text-lg font-medium leading-none"
           >
             −
           </button>
@@ -149,7 +153,7 @@ export default function StockAnalysisPage() {
           <button
             type="button"
             onClick={() => setCapital((c) => c + 50)}
-            className="px-3 py-2.5 text-text-muted hover:text-text-primary hover:bg-card-alt transition-colors text-lg font-medium leading-none"
+            className="px-3 py-2.5 text-text-muted hover:text-text-primary hover:bg-card-alt transition-colors active:scale-[0.95] cursor-pointer text-lg font-medium leading-none"
           >
             +
           </button>
@@ -157,7 +161,7 @@ export default function StockAnalysisPage() {
         <button
           onClick={analyze}
           disabled={loading}
-          className="flex items-center gap-2 px-6 py-2.5 bg-accent text-white rounded-xl text-sm font-semibold hover:bg-accent-light transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+          className="flex items-center gap-2 px-6 py-2.5 bg-accent text-white rounded-xl text-sm font-semibold hover:bg-accent-light transition-colors active:scale-[0.98] cursor-pointer shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {loading && <PulseInline />}
           {loading ? "Analyzing..." : "Analyze"}
@@ -172,8 +176,9 @@ export default function StockAnalysisPage() {
         >
           <PulseLoader
             size="lg"
-            label={`Analyzing ${ticker}...`}
-            sublabel="Running technicals, fundamentals, signals, and AI analysis. This can take up to 2 minutes."
+            label={`Analyzing ${ticker}... ${pct}%`}
+            progress={pct}
+            sublabel={step || "Running technicals, fundamentals, signals, and AI analysis."}
           />
         </div>
       )}
@@ -558,6 +563,97 @@ export default function StockAnalysisPage() {
             </div>
           )}
 
+          {/* Sentiment */}
+          {sentiment && sentiment.article_count > 0 && (
+            <div className="mt-6">
+              <h3 className="text-[18px] font-bold text-text-primary mb-3">
+                News Sentiment
+              </h3>
+              <div
+                className="bg-card border border-border rounded-2xl px-6 py-5"
+                style={{
+                  boxShadow: "var(--shadow-card)",
+                  borderLeftWidth: 4,
+                  borderLeftColor:
+                    sentiment.sentiment_label === "bullish"
+                      ? "#2d9d3a"
+                      : sentiment.sentiment_label === "bearish"
+                        ? "#d44040"
+                        : "#3b7dd8",
+                }}
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <Badge
+                    variant={
+                      sentiment.sentiment_label === "bullish"
+                        ? "green"
+                        : sentiment.sentiment_label === "bearish"
+                          ? "red"
+                          : "blue"
+                    }
+                  >
+                    {sentiment.sentiment_label.toUpperCase()}
+                  </Badge>
+                  <span className="text-[13px] text-text-muted">
+                    {sentiment.article_count} articles analyzed
+                  </span>
+                </div>
+
+                <div className="flex gap-8 items-end mb-4">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-text-muted font-medium mb-1">
+                      Sentiment Score
+                    </div>
+                    <div className="font-mono text-2xl font-bold text-text-primary">
+                      {sentiment.composite_score.toFixed(0)}/100
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-text-muted font-medium mb-1">
+                      Positive
+                    </div>
+                    <div className="font-mono text-lg font-semibold text-qp-green">
+                      {(sentiment.pct_positive * 100).toFixed(0)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-text-muted font-medium mb-1">
+                      Negative
+                    </div>
+                    <div className="font-mono text-lg font-semibold text-qp-red">
+                      {(sentiment.pct_negative * 100).toFixed(0)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-text-muted font-medium mb-1">
+                      Neutral
+                    </div>
+                    <div className="font-mono text-lg font-semibold text-text-muted">
+                      {(sentiment.pct_neutral * 100).toFixed(0)}%
+                    </div>
+                  </div>
+                </div>
+
+                {(sentiment.strongest_positive || sentiment.strongest_negative) && (
+                  <div className="space-y-2 pt-3 border-t border-border">
+                    {sentiment.strongest_positive && (
+                      <div className="text-[13px] text-text-body">
+                        <span className="font-semibold text-qp-green">Most positive:</span>{" "}
+                        {sentiment.strongest_positive}
+                      </div>
+                    )}
+                    {sentiment.strongest_negative && (
+                      <div className="text-[13px] text-text-body">
+                        <span className="font-semibold text-qp-red">Most negative:</span>{" "}
+                        {sentiment.strongest_negative}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Already Own It */}
           {take.already_own_it && (
             <div className="mt-6">
@@ -815,18 +911,20 @@ export default function StockAnalysisPage() {
                     <BarChart data={perfData} barCategoryGap="30%">
                       <XAxis
                         dataKey="period"
-                        tick={{ fill: "#6b6b63", fontSize: 13 }}
+                        tick={{ fill: "var(--color-text-muted)", fontSize: 13 }}
                         axisLine={false}
                         tickLine={false}
                       />
                       <YAxis hide />
                       <Tooltip
                         contentStyle={{
-                          background: "#fff",
-                          border: "1px solid #e8e8e3",
+                          background: "var(--color-card)",
+                          border: "1px solid var(--color-border)",
+                          color: "var(--color-text-primary)",
                           borderRadius: 12,
                           fontSize: 13,
                           fontFamily: "var(--font-mono)",
+                          boxShadow: "var(--shadow-card)",
                         }}
                         formatter={(v) => {
                           const n = Number(v);

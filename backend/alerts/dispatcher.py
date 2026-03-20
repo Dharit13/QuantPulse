@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.alerts.channels import ALL_CHANNELS
 from backend.alerts.types import ALERT_CONFIG, AlertPriority, AlertType
@@ -37,7 +37,7 @@ class AlertDispatcher:
         throttle_minutes = config.get("throttle_minutes", 0)
         if throttle_minutes > 0:
             last = self._last_sent.get(throttle_key)
-            if last and (datetime.utcnow() - last) < timedelta(minutes=throttle_minutes):
+            if last and (datetime.now(timezone.utc) - last) < timedelta(minutes=throttle_minutes):
                 logger.debug("Alert %s throttled (last sent %s)", alert_type.value, last)
                 return {}
 
@@ -55,7 +55,7 @@ class AlertDispatcher:
             results[ch_name] = channel.send(title=title, body=body, priority=priority)
 
         if any(results.values()):
-            self._last_sent[throttle_key] = datetime.utcnow()
+            self._last_sent[throttle_key] = datetime.now(timezone.utc)
 
         logger.info("Alert dispatched: %s → %s", alert_type.value, results)
         return results
@@ -64,11 +64,15 @@ class AlertDispatcher:
         body = f"REGIME: {regime_info}\n\nTOP SIGNALS:\n{signals_summary}\n\nACTIVE TRADES:\n{active_trades_summary}"
         return self.dispatch(AlertType.MORNING_BRIEF, title="QuantPulse Morning Brief", body=body)
 
-    def send_new_signal(self, ticker: str, strategy: str, direction: str, score: float, entry: float) -> dict[str, bool]:
+    def send_new_signal(
+        self, ticker: str, strategy: str, direction: str, score: float, entry: float
+    ) -> dict[str, bool]:
         body = f"{direction.upper()} {ticker} — {strategy} (score: {score:.0f})\nEntry zone: ${entry:.2f}"
         return self.dispatch(AlertType.NEW_SIGNAL, title=f"New Signal: {ticker}", body=body)
 
-    def send_stop_alert(self, ticker: str, current_price: float, stop_price: float, approaching: bool = False) -> dict[str, bool]:
+    def send_stop_alert(
+        self, ticker: str, current_price: float, stop_price: float, approaching: bool = False
+    ) -> dict[str, bool]:
         alert_type = AlertType.APPROACHING_STOP if approaching else AlertType.STOP_HIT
         distance_pct = abs(current_price - stop_price) / stop_price * 100
         verb = "approaching" if approaching else "HIT"

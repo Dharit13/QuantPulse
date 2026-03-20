@@ -8,7 +8,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { apiGet } from "@/lib/api";
+import { useSSEScan, type SSEScanActions } from "@/hooks/use-sse-scan";
 import type { AnalysisData } from "@/lib/types";
 
 interface AnalysisState {
@@ -16,10 +16,13 @@ interface AnalysisState {
   capital: number;
   data: AnalysisData | null;
   loading: boolean;
+  progress: number;
+  total: number;
+  step: string;
   error: string | null;
   setTicker: (v: string) => void;
   setCapital: (v: number | ((prev: number) => number)) => void;
-  analyze: () => Promise<void>;
+  analyze: () => void;
 }
 
 const AnalysisContext = createContext<AnalysisState | null>(null);
@@ -27,43 +30,35 @@ const AnalysisContext = createContext<AnalysisState | null>(null);
 export function AnalysisProvider({ children }: { children: ReactNode }) {
   const [ticker, setTicker] = useState("AAPL");
   const [capital, setCapital] = useState(10000);
-  const [data, setData] = useState<AnalysisData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const scan = useSSEScan<AnalysisData>(
+    "stock-analysis",
+    "/analyze/stream",
+    "/analyze/status",
+  );
 
   const tickerRef = useRef(ticker);
   tickerRef.current = ticker;
   const capitalRef = useRef(capital);
   capitalRef.current = capital;
 
-  const analyze = useCallback(async () => {
+  const analyze = useCallback(() => {
     const t = tickerRef.current.trim();
     if (!t) return;
-    setLoading(true);
-    setError(null);
-    setData(null);
-
-    const result = await apiGet<AnalysisData>(
-      `/analyze/${encodeURIComponent(t)}`,
-      { capital: capitalRef.current }
-    );
-
-    if (!result) {
-      setError(`Could not analyze "${t}". Check the backend is running.`);
-    } else {
-      setData(result);
-    }
-    setLoading(false);
-  }, []);
+    scan.start("/analyze/start", { ticker: t, capital: capitalRef.current });
+  }, [scan]);
 
   return (
     <AnalysisContext.Provider
       value={{
         ticker,
         capital,
-        data,
-        loading,
-        error,
+        data: scan.result,
+        loading: scan.isLoading,
+        progress: scan.progress,
+        total: scan.total,
+        step: scan.step,
+        error: scan.error,
         setTicker,
         setCapital,
         analyze,

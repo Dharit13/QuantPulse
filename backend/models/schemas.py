@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Literal
 
@@ -47,7 +47,7 @@ class TradeSignal(BaseModel):
     kill_condition: str
     expected_sharpe: float
     signal_score: float = Field(ge=0.0, le=100.0, default=50.0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ── Portfolio State ──
@@ -195,6 +195,7 @@ class EnrichedSignal(BaseModel):
     recommended_size_mode: str
     size_adjustment_reason: str
     final_recommendation: str
+    shadow_size_factor: float = 1.0
 
 
 class ScannerResult(BaseModel):
@@ -267,7 +268,7 @@ class BacktestResult(BaseModel):
     monthly_returns: list[dict]
     regime_performance: dict[str, dict]
     validation: dict
-    run_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    run_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ── Signal Sub-Models ──

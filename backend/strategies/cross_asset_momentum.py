@@ -145,8 +145,7 @@ class CrossAssetMomentumStrategy(BaseStrategy):
             contributing = [
                 s
                 for s in fired_signals
-                if (sector in s.long_sectors and score > 0)
-                or (sector in s.short_sectors and score < 0)
+                if (sector in s.long_sectors and score > 0) or (sector in s.short_sectors and score < 0)
             ]
             max_z = max((abs(s.z_score) for s in contributing), default=0)
             conviction = min(1.0, max_z / 4.0 + abs(score) / 8.0)

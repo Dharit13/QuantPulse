@@ -1,4 +1,4 @@
-from backend.models.database import Base, SessionLocal, get_db, init_db
+from backend.models.database import get_supabase
 from backend.models.schemas import (
     PerformanceStats,
     PhantomTrade,
@@ -14,10 +14,7 @@ from backend.models.schemas import (
 )
 
 __all__ = [
-    "Base",
-    "SessionLocal",
-    "get_db",
-    "init_db",
+    "get_supabase",
     "Regime",
     "StrategyName",
     "VolRegime",

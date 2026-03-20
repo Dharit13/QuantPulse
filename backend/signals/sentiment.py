@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
-from nlp.finbert_sentiment import SentimentResult, get_analyzer
+from nlp.finbert_sentiment import get_analyzer
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,8 @@ class NewsSentiment:
     pct_neutral: float
     strongest_positive: str
     strongest_negative: str
-    sentiment_label: str        # "bullish", "bearish", "neutral"
-    composite_score: float      # 0-100 for integration with signal scoring
+    sentiment_label: str  # "bullish", "bearish", "neutral"
+    composite_score: float  # 0-100 for integration with signal scoring
     analyzed_at: datetime
 
 
@@ -47,11 +47,17 @@ def analyze_ticker_sentiment(
 
     if len(headlines) < MIN_ARTICLES:
         return NewsSentiment(
-            ticker=ticker, article_count=len(headlines),
-            avg_compound=0.0, pct_positive=0.0, pct_negative=0.0,
-            pct_neutral=1.0, strongest_positive="", strongest_negative="",
-            sentiment_label="neutral", composite_score=50.0,
-            analyzed_at=datetime.utcnow(),
+            ticker=ticker,
+            article_count=len(headlines),
+            avg_compound=0.0,
+            pct_positive=0.0,
+            pct_negative=0.0,
+            pct_neutral=1.0,
+            strongest_positive="",
+            strongest_negative="",
+            sentiment_label="neutral",
+            composite_score=50.0,
+            analyzed_at=datetime.now(timezone.utc),
         )
 
     analyzer = get_analyzer(use_finbert=use_finbert)
@@ -92,7 +98,7 @@ def analyze_ticker_sentiment(
         strongest_negative=best_neg.text,
         sentiment_label=label,
         composite_score=round(composite, 2),
-        analyzed_at=datetime.utcnow(),
+        analyzed_at=datetime.now(timezone.utc),
     )
 
 
@@ -124,6 +130,7 @@ def _fetch_news_headlines(ticker: str) -> list[str]:
 
     try:
         from backend.data.fetcher import data_fetcher
+
         news = data_fetcher.get_news_sentiment(ticker)
         for item in news[:20]:
             title = item.get("headline", "") or item.get("title", "")
@@ -135,9 +142,14 @@ def _fetch_news_headlines(ticker: str) -> list[str]:
     if len(headlines) < MIN_ARTICLES:
         try:
             import yfinance as yf
+
             t = yf.Ticker(ticker)
             for item in (t.news or [])[:20]:
                 title = item.get("title", "")
+                if not title:
+                    content = item.get("content", {})
+                    if isinstance(content, dict):
+                        title = content.get("title", "")
                 if title and title not in headlines:
                     headlines.append(title)
         except Exception as e:

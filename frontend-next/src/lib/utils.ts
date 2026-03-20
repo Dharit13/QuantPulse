@@ -17,10 +17,12 @@ export function formatPercent(value: number, decimals = 1): string {
 }
 
 export function formatCompact(value: number): string {
-  if (value >= 1e12) return `$${(value / 1e12).toFixed(1)}T`;
-  if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
-  if (value >= 1e6) return `$${(value / 1e6).toFixed(0)}M`;
-  return `$${value.toLocaleString()}`;
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(1)}T`;
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(0)}M`;
+  return `${sign}$${abs.toLocaleString()}`;
 }
 
 export function pnlColor(val: number): string {

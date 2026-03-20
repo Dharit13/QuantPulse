@@ -49,28 +49,16 @@ def compute_adaptive_kelly(
     if len(regime_trades) < 20:
         all_wins = [t for t in trailing_trades if t.get("pnl_pct", 0) > 0]
         p = len(all_wins) / max(1, len(trailing_trades)) if trailing_trades else 0.5
-        avg_win = (
-            sum(t["pnl_pct"] for t in all_wins) / max(1, len(all_wins))
-            if all_wins else 0.03
-        )
+        avg_win = sum(t["pnl_pct"] for t in all_wins) / max(1, len(all_wins)) if all_wins else 0.03
         losses = [t for t in trailing_trades if t.get("pnl_pct", 0) <= 0]
-        avg_loss = (
-            abs(sum(t["pnl_pct"] for t in losses) / max(1, len(losses)))
-            if losses else 0.02
-        )
+        avg_loss = abs(sum(t["pnl_pct"] for t in losses) / max(1, len(losses))) if losses else 0.02
         confidence_penalty = 0.5
     else:
         wins = [t for t in regime_trades if t.get("pnl_pct", 0) > 0]
         p = len(wins) / len(regime_trades)
-        avg_win = (
-            sum(t["pnl_pct"] for t in wins) / max(1, len(wins))
-            if wins else 0.03
-        )
+        avg_win = sum(t["pnl_pct"] for t in wins) / max(1, len(wins)) if wins else 0.03
         losses = [t for t in regime_trades if t.get("pnl_pct", 0) <= 0]
-        avg_loss = (
-            abs(sum(t["pnl_pct"] for t in losses) / max(1, len(losses)))
-            if losses else 0.02
-        )
+        avg_loss = abs(sum(t["pnl_pct"] for t in losses) / max(1, len(losses))) if losses else 0.02
         confidence_penalty = 1.0
 
     q = 1 - p

@@ -10,7 +10,7 @@ Each sub-strategy uses adaptive parameters from get_catalyst_params().
 """
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
 import pandas as pd
 
@@ -22,8 +22,6 @@ from backend.config import settings
 from backend.data.fetcher import data_fetcher
 from backend.data.universe import fetch_sp500_constituents
 from backend.models.schemas import StrategyName, TradeSignal
-from backend.signals.earnings import detect_pead, scan_universe_for_pead
-from backend.signals.revisions import detect_revision_momentum, scan_universe_for_revisions
 from backend.strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
@@ -74,7 +72,9 @@ class CatalystEventStrategy(BaseStrategy):
         cb = self._progress_cb
         params = self.get_params(vol)
         kelly = compute_adaptive_kelly(
-            strategy="catalyst", vol=vol, regime=regime,
+            strategy="catalyst",
+            vol=vol,
+            regime=regime,
             trailing_trades=self.trailing_trades,
         )
         kelly_frac = kelly["kelly_fraction"] * 0.6
@@ -88,7 +88,7 @@ class CatalystEventStrategy(BaseStrategy):
             scan_tickers = tickers
         else:
             if cb:
-                cb(int(total * 0.02), total, "AI selecting the most interesting stocks to scan...")
+                cb(2, 100, "AI selecting the most interesting stocks to scan...")
 
             from backend.ai.market_ai import ai_pick_scan_tickers
             from backend.regime.detector import detect_regime
@@ -96,8 +96,8 @@ class CatalystEventStrategy(BaseStrategy):
             vix_val = 0.0
             breadth_val = 0.0
             try:
-                vix_df = data_fetcher.get_daily_ohlcv("^VIX", period="3mo", live=True)
-                spy_df = data_fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
+                vix_df = data_fetcher.get_daily_ohlcv("^VIX", period="3mo", live=False)
+                spy_df = data_fetcher.get_daily_ohlcv("SPY", period="1y", live=False)
                 if not vix_df.empty:
                     vix_val = float(vix_df["Close"].iloc[-1])
                 regime_result = detect_regime(vix_df, spy_df)
@@ -108,7 +108,11 @@ class CatalystEventStrategy(BaseStrategy):
             except Exception:
                 regime_str = regime
 
-            ai_picks = ai_pick_scan_tickers(regime_str, tickers, vix=vix_val, breadth_pct=breadth_val)
+            try:
+                ai_picks = ai_pick_scan_tickers(regime_str, tickers, vix=vix_val, breadth_pct=breadth_val)
+            except Exception as e:
+                logger.warning("AI ticker selection failed: %s", e)
+                ai_picks = None
 
             if ai_picks:
                 scan_tickers = ai_picks
@@ -119,8 +123,7 @@ class CatalystEventStrategy(BaseStrategy):
         n_scan = len(scan_tickers)
 
         if cb:
-            cb(int(total * 0.10), total,
-               f"Scanning {n_scan} AI-selected stocks for insider buying and catalysts...")
+            cb(5, 100, f"Scanning {n_scan} AI-selected stocks for insider buying and catalysts...")
 
         done_count = [0]
 
@@ -131,6 +134,7 @@ class CatalystEventStrategy(BaseStrategy):
             # 1) Earnings surprise (PEAD)
             try:
                 from backend.signals.earnings import detect_pead
+
                 es = detect_pead(ticker, vol, pead_lookback)
                 if es is not None:
                     sig = self._pead_to_trade_signal(es, vol, regime)
@@ -143,6 +147,7 @@ class CatalystEventStrategy(BaseStrategy):
             if not results:
                 try:
                     from backend.signals.revisions import detect_revision_momentum
+
                     rs = detect_revision_momentum(ticker, vol)
                     if rs is not None:
                         sig = self._revision_to_trade_signal(rs, vol, regime)
@@ -164,10 +169,9 @@ class CatalystEventStrategy(BaseStrategy):
                                 high = df["High"].tail(14)
                                 low = df["Low"].tail(14)
                                 prev_close = df["Close"].shift(1).tail(14)
-                                tr = pd.concat([
-                                    high - low, (high - prev_close).abs(),
-                                    (low - prev_close).abs()
-                                ], axis=1).max(axis=1)
+                                tr = pd.concat(
+                                    [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+                                ).max(axis=1)
                                 atr = float(tr.mean())
                                 stop_price = round(max(0.01, price - atr * 2), 2)
                                 target_price = round(price + atr * 3, 2)
@@ -180,9 +184,7 @@ class CatalystEventStrategy(BaseStrategy):
                                     val_str = f"${buy_val / 1_000:.0f}K"
                                 else:
                                     val_str = f"${buy_val:,.0f}"
-                                edge_parts = [
-                                    f"{buy_count} company insider(s) bought {val_str} worth of stock"
-                                ]
+                                edge_parts = [f"{buy_count} company insider(s) bought {val_str} worth of stock"]
                                 if score_data.get("cluster_buy"):
                                     edge_parts.append(
                                         "multiple insiders bought around the same time — "
@@ -193,33 +195,50 @@ class CatalystEventStrategy(BaseStrategy):
                                         "the CEO or CFO is buying — the people running the "
                                         "company are putting their own money in"
                                     )
-                                results.append(TradeSignal(
-                                    strategy=StrategyName.CATALYST, ticker=ticker,
-                                    direction="long", conviction=conviction,
-                                    kelly_size_pct=kelly_frac * 100, entry_price=price,
-                                    stop_loss=stop_price,
-                                    target=target_price, max_hold_days=365,
-                                    edge_reason=". ".join(edge_parts) + ".",
-                                    kill_condition=f"Insider sells appear, or if it drops below ${stop_price:.2f} (2x ATR stop), re-evaluate",
-                                    expected_sharpe=1.2, signal_score=min(100, score),
-                                ))
+                                results.append(
+                                    TradeSignal(
+                                        strategy=StrategyName.CATALYST,
+                                        ticker=ticker,
+                                        direction="long",
+                                        conviction=conviction,
+                                        kelly_size_pct=kelly_frac * 100,
+                                        entry_price=price,
+                                        stop_loss=stop_price,
+                                        target=target_price,
+                                        max_hold_days=params["max_hold_days"],
+                                        edge_reason=". ".join(edge_parts) + ".",
+                                        kill_condition=f"Insider sells appear, or if it drops below ${stop_price:.2f} (2x ATR stop), re-evaluate",
+                                        expected_sharpe=1.2,
+                                        signal_score=min(100, score),
+                                    )
+                                )
                 except Exception:
                     pass
 
             done_count[0] += 1
             if cb:
-                pct = done_count[0] / n_scan
-                cb(int(total * (0.05 + pct * 0.90)), total,
-                   f"Checking stocks... {done_count[0]}/{n_scan}")
+                scan_pct = int(5 + (done_count[0] / n_scan) * 55)
+                cb(scan_pct, 100, f"Checking stocks... {done_count[0]}/{n_scan}")
 
             return results
 
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            for ticker_results in pool.map(_scan_one, scan_tickers):
-                for sig in ticker_results:
-                    if sig.ticker not in seen:
-                        seen.add(sig.ticker)
-                        signals.append(sig)
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_scan_one, t): t for t in scan_tickers}
+            try:
+                for future in as_completed(futures, timeout=300):
+                    try:
+                        ticker_results = future.result(timeout=30)
+                    except (TimeoutError, Exception):
+                        continue
+                    for sig in ticker_results:
+                        if sig.ticker not in seen:
+                            seen.add(sig.ticker)
+                            signals.append(sig)
+            except TimeoutError:
+                logger.warning("Catalyst scan timeout, returning %d partial signals", len(signals))
+                pool.shutdown(wait=False, cancel_futures=True)
+
+        signals = self._apply_sentiment_boost(signals)
 
         # Institutional Flow (single API call, not per-ticker)
         if settings.enable_steadyapi and settings.steadyapi_api_key:
@@ -407,37 +426,106 @@ class CatalystEventStrategy(BaseStrategy):
             target = price * target_mult if direction == "long" else price / target_mult
 
             kelly = compute_adaptive_kelly(
-                strategy="catalyst", vol=vol, regime=regime,
+                strategy="catalyst",
+                vol=vol,
+                regime=regime,
                 trailing_trades=self.trailing_trades,
             )
             conviction = min(1.0, total / 2_000_000 + flow["count"] / 10)
 
-            signals.append(TradeSignal(
-                strategy=StrategyName.CATALYST,
-                ticker=ticker,
-                direction=direction,
-                conviction=conviction,
-                kelly_size_pct=kelly["kelly_fraction"] * 0.8 * 100,
-                entry_price=price,
-                stop_loss=stop_info["stop_price"],
-                target=round(target, 2),
-                max_hold_days=params["max_hold_days"],
-                edge_reason=(
-                    f"Institutional sweep flow: {flow['count']} sweeps, "
-                    f"${total:,.0f} total premium "
-                    f"(call=${flow['call']:,.0f} / put=${flow['put']:,.0f}). "
-                    f"Sweeps = urgency."
-                ),
-                kill_condition=(
-                    f"Flow reverses or stop at {stop_info['stop_price']:.2f}"
-                ),
-                expected_sharpe=1.4,
-                signal_score=min(100, conviction * 100),
-            ))
+            signals.append(
+                TradeSignal(
+                    strategy=StrategyName.CATALYST,
+                    ticker=ticker,
+                    direction=direction,
+                    conviction=conviction,
+                    kelly_size_pct=kelly["kelly_fraction"] * 0.8 * 100,
+                    entry_price=price,
+                    stop_loss=stop_info["stop_price"],
+                    target=round(target, 2),
+                    max_hold_days=params["max_hold_days"],
+                    edge_reason=(
+                        f"Institutional sweep flow: {flow['count']} sweeps, "
+                        f"${total:,.0f} total premium "
+                        f"(call=${flow['call']:,.0f} / put=${flow['put']:,.0f}). "
+                        f"Sweeps = urgency."
+                    ),
+                    kill_condition=(f"Flow reverses or stop at {stop_info['stop_price']:.2f}"),
+                    expected_sharpe=1.4,
+                    signal_score=min(100, conviction * 100),
+                )
+            )
 
         return signals
 
-    
+    @staticmethod
+    def _apply_sentiment_boost(signals: list[TradeSignal]) -> list[TradeSignal]:
+        """Boost or reduce signal conviction using cached FinBERT sentiment (spec §5).
+
+        Reads from sentiment_cache (populated every 2h by refresh_news_sentiment).
+        Falls back to live analyze_ticker_sentiment on cache miss.
+        """
+        if not signals:
+            return signals
+
+        from backend.data.sentiment_cache import sentiment_cache
+
+        try:
+            from backend.signals.sentiment import analyze_ticker_sentiment
+
+            _live_fallback = True
+        except Exception:
+            _live_fallback = False
+
+        boosted: list[TradeSignal] = []
+        for sig in signals:
+            try:
+                cached = sentiment_cache.get(sig.ticker)
+                if cached is not None:
+                    score = cached.composite_score
+                    label = cached.sentiment_label
+                    source = f"cached/{cached.model_used}"
+                elif _live_fallback:
+                    live = analyze_ticker_sentiment(sig.ticker)
+                    score = live.composite_score
+                    label = live.sentiment_label
+                    source = "live"
+                else:
+                    boosted.append(sig)
+                    continue
+
+                adjustment = 0
+                sentiment_note = ""
+
+                if score > 70 and sig.direction == "long":
+                    adjustment = min(10, round((score - 70) / 3))
+                    sentiment_note = f" [Sentiment boost +{adjustment}: {label} ({score:.0f}/100, {source})]"
+                elif score < 30 and sig.direction == "long":
+                    adjustment = -min(10, round((30 - score) / 3))
+                    sentiment_note = f" [Sentiment drag {adjustment}: {label} ({score:.0f}/100, {source})]"
+                elif score < 30 and sig.direction == "short":
+                    adjustment = min(10, round((30 - score) / 3))
+                    sentiment_note = f" [Sentiment boost +{adjustment}: {label} ({score:.0f}/100, {source})]"
+                elif score > 70 and sig.direction == "short":
+                    adjustment = -min(10, round((score - 70) / 3))
+                    sentiment_note = f" [Sentiment drag {adjustment}: {label} ({score:.0f}/100, {source})]"
+
+                if adjustment != 0:
+                    new_score = max(0.0, min(100.0, sig.signal_score + adjustment))
+                    new_conviction = max(0.0, min(1.0, new_score / 100.0))
+                    sig = sig.model_copy(
+                        update={
+                            "signal_score": new_score,
+                            "conviction": new_conviction,
+                            "edge_reason": sig.edge_reason + sentiment_note,
+                        }
+                    )
+
+                boosted.append(sig)
+            except Exception:
+                boosted.append(sig)
+
+        return boosted
 
     @staticmethod
     def _get_atr(ticker: str, period: int = 14) -> float:
@@ -450,11 +538,14 @@ class CatalystEventStrategy(BaseStrategy):
         low = df["Low"].tail(period)
         prev_close = df["Close"].shift(1).tail(period)
 
-        tr = pd.concat([
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ], axis=1).max(axis=1)
+        tr = pd.concat(
+            [
+                high - low,
+                (high - prev_close).abs(),
+                (low - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
 
         return float(tr.mean())
 

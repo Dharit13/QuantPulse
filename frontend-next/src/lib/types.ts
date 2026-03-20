@@ -1,3 +1,26 @@
+export interface StrategyActivity {
+  signal_count: number;
+  active: boolean;
+}
+
+export interface StrategyHealthInfo {
+  status: string;
+  sharpe_60d: number;
+  win_rate_60d: number;
+  size_adjustment?: number;
+}
+
+export interface PortfolioRiskInfo {
+  strategy_health?: Record<string, StrategyHealthInfo>;
+  correlation_dropped?: string[];
+  risk_rejected?: string[];
+  health_skipped?: string[];
+  portfolio_var_pct?: number;
+  expected_sharpe?: number;
+  var_adjusted?: boolean;
+  sharpe_adjusted?: boolean;
+}
+
 export interface RegimeData {
   regime: string;
   confidence: number;
@@ -6,6 +29,8 @@ export interface RegimeData {
   adx: number;
   regime_probabilities: Record<string, number>;
   strategy_weights: Record<string, number>;
+  strategy_activity?: Record<string, StrategyActivity>;
+  strategy_health?: Record<string, StrategyHealthInfo>;
 }
 
 export interface AIResult {
@@ -111,6 +136,17 @@ export interface AnalysisData {
       stop_price: number;
       target_price: number;
     };
+  };
+  sentiment?: {
+    article_count: number;
+    avg_compound: number;
+    pct_positive: number;
+    pct_negative: number;
+    pct_neutral: number;
+    sentiment_label: string;
+    composite_score: number;
+    strongest_positive: string;
+    strongest_negative: string;
   };
   dcf_valuation?: {
     intrinsic_value: number;

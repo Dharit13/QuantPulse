@@ -14,88 +14,20 @@ import json
 import logging
 
 from backend.config import settings
+from backend.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
 VALID_BIASES = [
-    "bullish", "lean bullish", "cautiously bullish",
+    "bullish",
+    "lean bullish",
+    "cautiously bullish",
     "neutral",
-    "lean bearish", "bearish",
+    "lean bearish",
+    "bearish",
 ]
 
-SYSTEM_PROMPT = """\
-You are a senior trader at Jane Street advising a friend on a stock. You give \
-two pieces of advice: (1) should they BUY this stock for the long term, and \
-(2) if they ALREADY OWN it, what should they do right now.
-
-You will receive a structured data snapshot: price action, technicals, \
-fundamentals, macro regime, and strategy signals. Synthesize everything into \
-a decisive, expert assessment.
-
-Your investor profile:
-- NOT a day trader. Holds for 6-12 months minimum, targeting 30%+ returns.
-- Has limited capital. Every dollar matters. Be protective of downside.
-- Wants clear answers: "Should I buy?" and "I already own it — what now?"
-- Needs specific guidance: "Hold at least X days" or "Sell if it drops below $Y."
-
-Rules:
-- Be brutally honest. If the stock is mediocre, say so. Don't sugarcoat.
-- Think like Jane Street: what's the edge? What's the asymmetry?
-- Write for someone who is NOT a finance professional. No jargon without explanation.
-- Never invent data. Only reference numbers from the provided snapshot.
-- If insiders are buying, that matters a LOT. Highlight it.
-- Do NOT mention that you are an AI or that you received data.
-- Dollar amounts use $ prefix. Percentages use % suffix.
-
-CRITICAL for the "already_own_it" field:
-- Analyze RSI, recent returns, support levels, volume, and trend to determine \
-  if the stock is in a temporary dip or a real breakdown.
-- If RSI is oversold (<35) or price is near strong support, advise HOLD with a \
-  specific minimum hold period (e.g., "Hold at least 5-7 trading days").
-- If the stock is down but fundamentals are strong, say "Don't panic sell. This \
-  dip looks temporary because [reason]. Hold at least X days."
-- If the stock is breaking down through 200-SMA with heavy volume, advise to \
-  cut losses with a specific stop level.
-- If the stock is up strongly and RSI is overbought (>70), advise taking partial \
-  profits or setting a trailing stop.
-- Always give a SPECIFIC action, a SPECIFIC price level, and a SPECIFIC time frame.
-- The action must be one of: BUY MORE, HOLD, HOLD TIGHT, TAKE PARTIAL PROFITS, SELL.
-
-You MUST respond with valid JSON matching this exact schema:
-{
-  "bias": "<one of: bullish, lean bullish, cautiously bullish, neutral, lean bearish, bearish>",
-  "score": <integer 0-100, conviction score>,
-  "notes": ["<observation 1>", "<observation 2>", ...],
-  "summary": "<3-5 sentence plain-English analysis for someone considering buying>",
-  "return_outlook": "<1-2 sentences: can this stock hit 30% in 6-12 months? Be specific.>",
-  "already_own_it": {
-    "action": "<BUY MORE | HOLD | HOLD TIGHT | TAKE PARTIAL PROFITS | SELL>",
-    "headline": "<short 5-10 word directive, e.g. 'Hold tight — this dip is temporary'>",
-    "reasoning": "<2-4 sentences explaining WHY with specific data points. Reference RSI, \
-support levels, volume, insider activity, or earnings. Be specific about what you're watching.>",
-    "simple": "<2-3 sentences explaining the same advice in everyday language for someone \
-who knows NOTHING about finance. No jargon at all — no RSI, no SMA, no moving averages, \
-no volume ratios. Use analogies. Example: 'The stock dropped but the company is still \
-doing great — it's like a store having a bad week of weather but the business is fine. \
-Don't sell in a panic. Give it 2 weeks to recover.'>",
-    "hold_days": <minimum days to hold before reassessing, integer, 0 if SELL>,
-    "stop_price": <price level where they should exit no matter what, float>,
-    "target_price": <realistic price target for this hold period, float>
-  }
-}
-
-Guidelines for each field:
-- bias: your directional view for 6-12 months. Only say "bullish" if you'd bet \
-  real money. "neutral" means "there are better opportunities elsewhere."
-- score: 0 = strong avoid, 50 = meh/no edge, 70+ = worth betting on, 85+ = high conviction
-- notes: 4-6 bullet points. Lead with the most important factor for the long-term \
-  thesis. Include valuation, growth, insider activity, and macro headwinds/tailwinds.
-- summary: talk like you're advising a friend considering BUYING. Be direct about \
-  whether to buy or skip. Mention specific prices.
-- return_outlook: specifically address the 30% return target. Reference analyst \
-  targets, earnings growth rates, or historical patterns.
-- already_own_it: expert advice for someone who ALREADY holds this stock and is \
-  worried or unsure. Be the calm, data-driven voice. Give them a specific plan."""
+SYSTEM_PROMPT = load_prompt("stock_analysis")
 
 
 def _build_user_prompt(
@@ -107,17 +39,33 @@ def _build_user_prompt(
     dcf: dict | None = None,
     short_interest: list | None = None,
     institutional: dict | None = None,
+    sentiment: dict | None = None,
+    sentiment_context: str = "",
 ) -> str:
     sections = [f"Stock: {ticker}\n"]
 
     sections.append("== PRICE ACTION & TECHNICALS ==")
     for key in [
-        "current_price", "return_1d", "return_5d", "return_20d", "return_60d",
-        "trend", "rsi_14", "atr_14", "atr_pct",
-        "sma_20", "sma_50", "sma_200",
-        "high_52w", "low_52w", "pct_from_52w_high",
-        "volume_latest", "volume_avg_20d", "volume_ratio",
-        "support_20d", "resistance_20d",
+        "current_price",
+        "return_1d",
+        "return_5d",
+        "return_20d",
+        "return_60d",
+        "trend",
+        "rsi_14",
+        "atr_14",
+        "atr_pct",
+        "sma_20",
+        "sma_50",
+        "sma_200",
+        "high_52w",
+        "low_52w",
+        "pct_from_52w_high",
+        "volume_latest",
+        "volume_avg_20d",
+        "volume_ratio",
+        "support_20d",
+        "resistance_20d",
     ]:
         val = technicals.get(key)
         if val is not None:
@@ -126,10 +74,21 @@ def _build_user_prompt(
 
     sections.append("\n== FUNDAMENTALS ==")
     for key in [
-        "sector", "industry", "market_cap", "pe_ratio", "forward_pe",
-        "peg_ratio", "eps_trailing", "eps_forward",
-        "revenue_growth", "profit_margin", "debt_to_equity",
-        "beta", "dividend_yield", "short_ratio", "analyst_target",
+        "sector",
+        "industry",
+        "market_cap",
+        "pe_ratio",
+        "forward_pe",
+        "peg_ratio",
+        "eps_trailing",
+        "eps_forward",
+        "revenue_growth",
+        "profit_margin",
+        "debt_to_equity",
+        "beta",
+        "dividend_yield",
+        "short_ratio",
+        "analyst_target",
     ]:
         val = fundamentals.get(key)
         if val is not None:
@@ -175,7 +134,22 @@ def _build_user_prompt(
         if sold_p.get("holders"):
             sections.append(f"  Sold out: {sold_p['holders']} holders")
 
-    sections.append(f"\n== MACRO REGIME ==")
+    if sentiment and sentiment.get("article_count", 0) > 0:
+        sections.append("\n== NEWS SENTIMENT (FinBERT) ==")
+        sections.append(f"  Articles analyzed: {sentiment['article_count']}")
+        sections.append(
+            f"  Sentiment: {sentiment['sentiment_label'].upper()} (score {sentiment['composite_score']:.0f}/100)"
+        )
+        sections.append(f"  Avg compound: {sentiment['avg_compound']:+.3f}")
+        sections.append(
+            f"  Positive/Negative/Neutral: {sentiment['pct_positive']:.0%} / {sentiment['pct_negative']:.0%} / {sentiment['pct_neutral']:.0%}"
+        )
+        if sentiment.get("strongest_positive"):
+            sections.append(f"  Most positive headline: {sentiment['strongest_positive'][:120]}")
+        if sentiment.get("strongest_negative"):
+            sections.append(f"  Most negative headline: {sentiment['strongest_negative'][:120]}")
+
+    sections.append("\n== MACRO REGIME ==")
     sections.append(f"  Current regime: {regime.replace('_', ' ')}")
 
     if signals:
@@ -186,6 +160,9 @@ def _build_user_prompt(
             score = sig.get("signal_score", 0)
             edge = sig.get("edge_reason", "")
             sections.append(f"  [{strategy}] {direction} (score {score}): {edge}")
+
+    if sentiment_context:
+        sections.append(f"\n== UNIVERSE SENTIMENT ==\n{sentiment_context}")
 
     return "\n".join(sections)
 
@@ -199,6 +176,8 @@ def ai_system_take(
     dcf: dict | None = None,
     short_interest: list | None = None,
     institutional: dict | None = None,
+    sentiment: dict | None = None,
+    sentiment_context: str = "",
 ) -> dict | None:
     """Generate AI-powered system take using Claude.
 
@@ -214,12 +193,20 @@ def ai_system_take(
         return None
 
     user_prompt = _build_user_prompt(
-        ticker, technicals, fundamentals, regime, signals,
-        dcf=dcf, short_interest=short_interest, institutional=institutional,
+        ticker,
+        technicals,
+        fundamentals,
+        regime,
+        signals,
+        dcf=dcf,
+        short_interest=short_interest,
+        institutional=institutional,
+        sentiment=sentiment,
+        sentiment_context=sentiment_context,
     )
 
     try:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=60.0)
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1024,
