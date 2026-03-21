@@ -4,6 +4,8 @@ import { Sidebar } from "@/components/sidebar";
 import { MarketStatusBar } from "@/components/market-status-bar";
 import { AnalysisProvider } from "@/context/analysis-context";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthGate } from "@/components/auth-gate";
+import { ErrorBoundary } from "@/components/error-boundary";
 import "./globals.css";
 
 const ibmPlex = IBM_Plex_Sans({
@@ -33,7 +35,6 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Prevent flash of wrong theme by setting class before paint */}
         <script
           dangerouslySetInnerHTML={{
             __html: `(function(){try{var t=localStorage.getItem("qp-theme");if(t==="light")return;document.documentElement.classList.add("dark")}catch(e){}})()`,
@@ -44,15 +45,19 @@ export default function RootLayout({
         className={`${ibmPlex.variable} ${jetbrainsMono.variable} font-sans antialiased bg-background`}
       >
         <ThemeProvider>
-          <AnalysisProvider>
-            <Sidebar />
-            <main className="min-h-screen transition-all duration-200 ml-0 md:ml-[72px] lg:ml-[250px]">
-              <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-6 lg:py-8">
-                <MarketStatusBar />
-                {children}
-              </div>
-            </main>
-          </AnalysisProvider>
+          <AuthGate>
+            <ErrorBoundary>
+              <AnalysisProvider>
+                <Sidebar />
+                <main className="min-h-screen transition-all duration-200 ml-0 md:ml-[72px] lg:ml-[250px]">
+                  <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-6 lg:py-8">
+                    <MarketStatusBar />
+                    {children}
+                  </div>
+                </main>
+              </AnalysisProvider>
+            </ErrorBoundary>
+          </AuthGate>
         </ThemeProvider>
       </body>
     </html>
