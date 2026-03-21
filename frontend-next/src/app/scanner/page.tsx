@@ -98,7 +98,7 @@ export default function ScannerPage() {
       <PageHeader
         title="Signal Scanner"
         subtitle="Find stocks where something interesting is happening"
-        description="Finds long-term investment opportunities (6-12 months) by looking for WHY a stock might grow — company insiders buying their own stock, strong earnings, or analyst upgrades. AI picks the 50 most promising stocks to investigate based on current news and market conditions. Different from Swing Picks, which finds short-term trades (3-10 days)."
+        description="Finds medium to long-term investment opportunities (1-6 months) by looking for WHY a stock might grow — company insiders buying their own stock, strong earnings, or analyst upgrades. AI picks the 50 most promising stocks to investigate based on current news and market conditions. Different from Swing Picks, which finds short-term trades (3-10 days)."
         actions={
           <div className="flex items-center gap-2">
             {scan.status === "done" && scan.resultTimestamp && (
@@ -293,7 +293,7 @@ export default function ScannerPage() {
                   {scan.result.total_signals
                     ? `Found ${scan.result.total_signals} total signals, showing top ${normalized.length}.`
                     : `Showing top ${normalized.length} signals.`}
-                  {" "}These are long-term (6-12 month) investment opportunities.
+                  {" "}These are medium to long-term (1-6 month) investment opportunities.
                 </p>
               </div>
             )}

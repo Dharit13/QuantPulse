@@ -48,6 +48,7 @@ from backend.tracker.strategy_health import compute_strategy_health
 router = APIRouter(prefix="/scan", tags=["scanner"])
 logger = logging.getLogger(__name__)
 _fetcher = DataFetcher()
+_MIN_HOLD_DAYS = 14
 _executor = ThreadPoolExecutor(max_workers=2)
 _auditor = SignalAuditor()
 
@@ -323,7 +324,7 @@ def _generate_sentiment_signals(
     target_atr_mult = 2.0 + vol.vol_scale * 1.0
 
     # Hold period shortens in fast markets
-    hold_days = max(10, int(30 / max(0.5, vol.speed_scale)))
+    hold_days = max(30, int(90 / max(0.5, vol.speed_scale)))
 
     signals: list[TradeSignal] = []
     for ticker, score, label in candidates:
@@ -493,8 +494,6 @@ def _run_scan(
             futures["stat_arb"] = pool.submit(_run_stat_arb, vol, tickers, regime.value)
         if settings.enable_flow:
             futures["flow"] = pool.submit(_run_flow, vol, tickers, regime.value)
-        if settings.enable_gap_reversion:
-            futures["gap_reversion"] = pool.submit(_run_gap_reversion, vol, tickers, regime.value)
 
         for name, future in futures.items():
             try:
@@ -556,7 +555,11 @@ async def scan_universe(
     all_signals = await loop.run_in_executor(_executor, _run_scan, vol, regime)
 
     enriched = _enrich_signals(all_signals, vol, regime)
-    filtered = [e for e in enriched if e.signal.signal_score >= min_score]
+    filtered = [
+        e for e in enriched
+        if e.signal.signal_score >= min_score
+        and (e.signal.max_hold_days or 0) >= _MIN_HOLD_DAYS
+    ]
     filtered.sort(
         key=lambda e: (e.signal.conviction, e.signal.signal_score),
         reverse=True,
@@ -666,7 +669,11 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
 
         tracker.start_phase("filter", "Ranking and filtering...")
 
-        filtered = [e for e in enriched if e.signal.signal_score >= min_score]
+        filtered = [
+            e for e in enriched
+            if e.signal.signal_score >= min_score
+            and (e.signal.max_hold_days or 0) >= _MIN_HOLD_DAYS
+        ]
         filtered.sort(
             key=lambda e: (e.signal.conviction, e.signal.signal_score),
             reverse=True,

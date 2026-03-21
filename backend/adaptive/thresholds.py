@@ -17,7 +17,7 @@ def get_stat_arb_params(vol: VolContext) -> dict:
         "stop_z": 3.5 * max(0.8, min(2.0, vs)),
         "max_position_pct": 0.04 * ps,
         "max_strategy_pct": 0.20 * ps,
-        "max_hold_days": int(20 / max(0.5, vol.speed_scale)),
+        "max_hold_days": int(45 / max(0.5, vol.speed_scale)),
         "min_adf_pvalue": 0.01 if vs < 1.5 else 0.005,
         "min_half_life_days": max(2, int(3 / vol.speed_scale)),
         "max_half_life_days": int(30 / max(0.5, vol.speed_scale)),
@@ -33,7 +33,7 @@ def get_catalyst_params(vol: VolContext) -> dict:
         "min_earnings_gap_pct": 2.0 * max(0.8, vs * 0.7),
         "stop_loss_pct": 5.0 * max(0.8, min(2.0, vs)),
         "target_return_pct": 10.0 * max(0.8, min(1.5, vs)),
-        "max_hold_days": int(40 / max(0.7, vol.speed_scale)),
+        "max_hold_days": int(90 / max(0.7, vol.speed_scale)),
         "max_position_pct": 0.06 * ps,
         "min_breadth": 0.3 if vs < 1.3 else 0.4,
         "min_acceleration": 0.1 if vs < 1.3 else 0.15,
@@ -53,7 +53,7 @@ def get_cross_asset_params(vol: VolContext) -> dict:
 
     return {
         "signal_z_threshold": 1.5 * max(0.7, min(2.0, vs)),
-        "max_hold_days": int(15 / max(0.5, vol.speed_scale)),
+        "max_hold_days": int(45 / max(0.5, vol.speed_scale)),
         "active_signals": active,
     }
 
@@ -77,7 +77,7 @@ def get_flow_params(vol: VolContext) -> dict:
     return {
         "min_sweep_premium": 100_000 * max(1.0, vs),
         "min_dark_pool_notional": 1_000_000 * max(1.0, vs),
-        "max_hold_days": int(10 / max(0.5, vol.speed_scale)),
+        "max_hold_days": int(30 / max(0.5, vol.speed_scale)),
         "stop_loss_pct": 3.0 * max(0.8, min(2.0, vs)),
         "gex_significance_threshold": "auto",
     }

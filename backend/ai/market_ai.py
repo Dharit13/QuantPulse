@@ -657,7 +657,7 @@ def ai_swing_invest(regime: str, capital: float, picks: list[dict]) -> dict | No
     return _call_claude(_SWING_INVEST_SYSTEM, user, max_tokens=1500)
 
 
-# ── AI Investment Research (Long-Term 6-12 Month) ────────────
+# ── AI Investment Research (Medium-Term 1-6 Month) ────────────
 
 _INVEST_RESEARCH_SYSTEM = load_prompt("invest_research")
 
@@ -706,7 +706,7 @@ def ai_investment_research(regime: str, capital: float, picks: list[dict]) -> di
         stop = p.get("stop_loss", round(price * 0.92, 2))
         target = p.get("target", round(price * 1.15, 2))
 
-        hold = p.get("hold_period", "6-12 months")
+        hold = p.get("hold_period", "1-6 months")
 
         pick_blocks.append(
             f"--- Pick #{i + 1} ---\n"

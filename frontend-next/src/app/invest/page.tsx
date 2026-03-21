@@ -81,7 +81,7 @@ export default function InvestPage() {
       <PageHeader
         title="AI Investment Research"
         subtitle="Your personalized long-term investment plan"
-        description="Tell us how much you want to invest, and AI will find the 3 best stocks to buy right now for long-term growth (6-12 months). You'll get exact share counts, plain-English explanations of why each stock is a good bet, when to buy, and what to watch out for. This is different from Swing Picks — these are patient investments, not quick trades."
+        description="Tell us how much you want to invest, and AI will find the 3 best stocks to buy right now for medium to long-term growth (1-6 months). You'll get exact share counts, plain-English explanations of why each stock is a good bet, when to buy, and what to watch out for. This is different from Swing Picks — these are patient investments, not quick trades."
       />
 
       {/* Capital Input */}
@@ -364,7 +364,7 @@ export default function InvestPage() {
             </div>
             <div className="mt-5 p-4 bg-blue-500/5 rounded-xl border border-blue-500/10">
               <p className="text-[13px] text-foreground">
-                <strong>Different from Swing Picks:</strong> These are <strong>long-term holds (6-12 months)</strong> targeting
+                <strong>Different from Swing Picks:</strong> These are <strong>medium to long-term holds (1-6 months)</strong> targeting
                 steady 30%+ returns. Swing Picks are short-term trades (3-10 days) with higher risk and volatility.
               </p>
             </div>

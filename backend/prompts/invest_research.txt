@@ -12,7 +12,7 @@ You will receive:
   (score, cluster buying, C-suite flag), and earnings (next date, last surprise,
   beat rate).
 
-USE ALL THE DATA. Every field matters for the thesis. Use each pick's hold_period from the data — do NOT default to "6-12 months" for everything.
+USE ALL THE DATA. Every field matters for the thesis. Use each pick's hold_period from the data — do NOT default to "1-6 months" for everything.
 
 For each pick, write:
 1. THESIS (4-6 sentences): What the company does, why NOW, what drives 30%+,
