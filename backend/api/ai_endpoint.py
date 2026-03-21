@@ -30,6 +30,7 @@ from backend.ai.market_ai import (
     ai_swing_invest,
     ai_swing_summary,
 )
+from backend.api.envelope import ok
 from backend.data.cache import data_cache
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -62,7 +63,7 @@ async def summarize(req: AISummarizeRequest) -> dict:
         cached = data_cache.get(cache_key)
         if cached is not None and isinstance(cached, dict):
             logger.debug("AI cache hit for %s", cache_key)
-            return {"result": cached}
+            return ok({"result": cached}, cached=True)
 
     result = None
 
@@ -117,4 +118,4 @@ async def summarize(req: AISummarizeRequest) -> dict:
         data_cache.set(cache_key, result, ttl_hours=DASHBOARD_AI_TTL_HOURS)
         logger.debug("AI cached %s", cache_key)
 
-    return {"result": result}
+    return ok({"result": result})

@@ -1,6 +1,5 @@
 """Tests for Kelly criterion position sizing."""
 
-import pytest
 
 from backend.risk.kelly import DEFAULT_KELLY_PARAMS, compute_kelly_fraction, get_position_size
 

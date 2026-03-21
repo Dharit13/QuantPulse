@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Request
 
+from backend.api.envelope import err, ok
 from backend.models.database import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,10 @@ async def get_recent_errors(limit: int = 50):
             .limit(limit)
             .execute()
         )
-        return {"errors": result.data or [], "count": len(result.data or [])}
+        return ok({"errors": result.data or [], "count": len(result.data or [])})
     except Exception as e:
         logger.warning("Failed to fetch errors: %s", e)
-        return {"errors": [], "count": 0}
+        return ok({"errors": [], "count": 0})
 
 
 @router.post("/{error_id}/resolve")
@@ -35,10 +36,10 @@ async def resolve_error(error_id: int):
     """Mark an error as resolved."""
     try:
         get_supabase().table("error_events").update({"resolved": True}).eq("id", error_id).execute()
-        return {"status": "resolved"}
+        return ok({"status": "resolved"})
     except Exception as e:
         logger.warning("Failed to resolve error %d: %s", error_id, e)
-        return {"status": "error", "detail": str(e)}
+        return err("resolve_failed", str(e), status=500)
 
 
 @router.post("/report")
@@ -54,7 +55,7 @@ async def report_frontend_error(request: Request):
         request_path=body.get("url", ""),
         request_method="FRONTEND",
     )
-    return {"status": "recorded"}
+    return ok({"status": "recorded"})
 
 
 @router.post("/cleanup")
@@ -63,7 +64,7 @@ async def cleanup_old_errors(days: int = 30):
     try:
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         get_supabase().table("error_events").delete().eq("resolved", True).lt("last_seen", cutoff).execute()
-        return {"status": "cleaned"}
+        return ok({"status": "cleaned"})
     except Exception as e:
         logger.warning("Error cleanup failed: %s", e)
-        return {"status": "error", "detail": str(e)}
+        return err("cleanup_failed", str(e), status=500)

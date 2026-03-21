@@ -1,6 +1,6 @@
 """Shared test fixtures — synthetic market data and VolContext objects."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import numpy as np
 import pandas as pd

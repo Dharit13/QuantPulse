@@ -1,7 +1,6 @@
 """Tests for signal decay monitoring."""
 
 import numpy as np
-import pytest
 
 from backend.signals.decay_monitor import (
     DecayStatus,

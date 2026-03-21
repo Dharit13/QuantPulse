@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from backend.alerts.channels import ALL_CHANNELS
 from backend.alerts.types import ALERT_CONFIG, AlertPriority, AlertType
@@ -37,7 +37,7 @@ class AlertDispatcher:
         throttle_minutes = config.get("throttle_minutes", 0)
         if throttle_minutes > 0:
             last = self._last_sent.get(throttle_key)
-            if last and (datetime.now(timezone.utc) - last) < timedelta(minutes=throttle_minutes):
+            if last and (datetime.now(UTC) - last) < timedelta(minutes=throttle_minutes):
                 logger.debug("Alert %s throttled (last sent %s)", alert_type.value, last)
                 return {}
 
@@ -55,7 +55,7 @@ class AlertDispatcher:
             results[ch_name] = channel.send(title=title, body=body, priority=priority)
 
         if any(results.values()):
-            self._last_sent[throttle_key] = datetime.now(timezone.utc)
+            self._last_sent[throttle_key] = datetime.now(UTC)
 
         logger.info("Alert dispatched: %s → %s", alert_type.value, results)
         return results

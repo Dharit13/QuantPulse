@@ -170,13 +170,14 @@ app.include_router(ws_router)
 
 @app.get("/health")
 async def health():
+    from backend.api.envelope import ok
     from backend.redis_client import redis_available
     from backend.websocket.manager import manager
 
-    return {
+    return ok({
         "status": "ok",
         "version": "2.0.0",
         "redis": redis_available(),
         "ws_clients": manager.client_count,
         "auth_enabled": settings.auth_enabled,
-    }
+    })

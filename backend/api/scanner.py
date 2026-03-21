@@ -24,6 +24,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.adaptive.vol_context import VolContext, compute_vol_context
 from backend.ai.market_ai import ai_scan_summary, ai_signal_explain
+from backend.api.envelope import ok
 from backend.config import settings
 from backend.data.cache import data_cache
 from backend.data.fetcher import DataFetcher
@@ -41,6 +42,7 @@ from backend.models.schemas import (
 )
 from backend.regime.detector import detect_regime
 from backend.signals.tradability import check_tradability
+from backend.tasks.state import TaskState
 from backend.tracker.shadow_evidence import get_similar_signal_evidence
 from backend.tracker.signal_audit import SignalAuditor
 from backend.tracker.strategy_health import compute_strategy_health
@@ -537,13 +539,13 @@ async def scan_universe(
     if not refresh:
         cached = data_cache.get("pipeline:scanner")
         if cached and isinstance(cached, dict):
-            return cached
+            return ok(cached, cached=True)
 
     from backend.pipeline import refresh_scanner
 
     result = refresh_scanner()
     if result:
-        return result
+        return ok(result)
 
     vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=False)
     spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=False)
@@ -572,25 +574,29 @@ async def scan_universe(
         signals=filtered,
         total_signals=len(all_signals),
     )
-    return {
-        "data": result_obj.model_dump(mode="json"),
-        "refreshed_at": datetime.now(UTC).isoformat(),
-    }
+    return ok(
+        {
+            "data": result_obj.model_dump(mode="json"),
+            "refreshed_at": datetime.now(UTC).isoformat(),
+        }
+    )
 
 
 # ── Background scan ──────────────────────────────────────────
 
-_scanner_state: dict = {
-    "status": "idle",
-    "progress": 0,
-    "total": 0,
-    "universe_size": 0,
-    "result": None,
-    "result_timestamp": None,
-    "ai_summary": None,
-    "signal_explanations": None,
-    "error": None,
-}
+_scanner_state = TaskState("scanner")
+
+
+class _ScannerProgressState:
+    """ScanProgressTracker writes via __setitem__; TaskState uses update()."""
+
+    __slots__ = ("_ts",)
+
+    def __init__(self, ts: TaskState) -> None:
+        self._ts = ts
+
+    def __setitem__(self, key: str, value: object) -> None:
+        self._ts.update(**{key: value})
 
 
 def _run_scanner_background(max_signals: int, min_score: float) -> None:
@@ -599,10 +605,8 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
 
     from backend.progress import ScanProgressTracker
 
-    global _scanner_state
     try:
-        _scanner_state["status"] = "scanning"
-        _scanner_state["error"] = None
+        _scanner_state.update(status="scanning", error=None)
 
         tracker = ScanProgressTracker.create(
             [
@@ -613,14 +617,14 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
                 ("ai_summary", 15),
                 ("ai_explain", 15),
             ],
-            _scanner_state,
+            _ScannerProgressState(_scanner_state),
             "progress:scanner",
         )
 
         tracker.start_phase("regime", "Detecting market regime...")
 
         universe = _get_scan_universe()
-        _scanner_state["universe_size"] = len(universe)
+        _scanner_state.update(universe_size=len(universe))
 
         vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=False)
         spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=False)
@@ -709,18 +713,17 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
         tracker.finish()
         tracker.save_history("progress:scanner")
 
-        _scanner_state["result"] = result_dict
-        _scanner_state["result_timestamp"] = datetime.now(UTC).isoformat()
-        _scanner_state["ai_summary"] = ai_summary
-        _scanner_state["signal_explanations"] = signal_explanations
-        _scanner_state["status"] = "done"
+        _scanner_state.set_result(
+            result_dict,
+            ai_summary=ai_summary,
+            signal_explanations=signal_explanations,
+        )
         data_cache.set("scanner:last_result", result_dict, ttl_hours=24.0)
         data_cache.set("scanner:ai_summary", ai_summary, ttl_hours=24.0)
         data_cache.set("scanner:signal_explanations", signal_explanations, ttl_hours=24.0)
         logger.info("Background scan done: %d signals (of %d total)", len(filtered), len(all_signals))
     except Exception as e:
-        _scanner_state["status"] = "error"
-        _scanner_state["error"] = str(e)
+        _scanner_state.update(status="error", error=str(e))
         logger.exception("Background scan failed")
 
 
@@ -730,33 +733,42 @@ async def start_scan(
     min_score: float = Query(default=60.0, ge=0, le=100),
 ) -> dict:
     """Kick off a scanner run in the background. Returns immediately."""
-    if _scanner_state["status"] == "scanning":
-        return {
-            "status": "already_scanning",
-            "progress": _scanner_state["progress"],
-            "total": _scanner_state["total"],
-        }
+    cur = _scanner_state.get()
+    if cur.get("status") == "scanning":
+        return ok(
+            {
+                "status": "already_scanning",
+                "progress": cur.get("progress", 0),
+                "total": cur.get("total", 0),
+            }
+        )
 
-    _scanner_state["status"] = "scanning"
-    _scanner_state["progress"] = 0
-    _scanner_state["total"] = 4
-    _scanner_state["result"] = None
-    _scanner_state["ai_summary"] = None
-    _scanner_state["signal_explanations"] = None
+    _scanner_state.update(
+        status="scanning",
+        progress=0,
+        total=4,
+        result=None,
+        ai_summary=None,
+        signal_explanations=None,
+    )
 
     _executor.submit(_run_scanner_background, max_signals, min_score)
-    return {"status": "started"}
+    return ok({"status": "started"})
 
 
 @router.get("/status")
 async def get_scanner_status() -> dict:
     """Poll scan progress. Returns status, progress, and results when done."""
-    status = _scanner_state["status"]
-    result = _scanner_state["result"] if status == "done" else None
-    ai_summary = _scanner_state.get("ai_summary")
-    signal_explanations = _scanner_state.get("signal_explanations")
-    result_timestamp = _scanner_state.get("result_timestamp")
+    state = _scanner_state.get()
+    status = state.get("status", "idle")
+    result = state.get("result") if status == "done" else None
+    if result is None and status == "done":
+        result = _scanner_state.get_result()
+    ai_summary = state.get("ai_summary")
+    signal_explanations = state.get("signal_explanations")
+    result_timestamp = state.get("result_timestamp")
     cached_at: str | None = None
+    from_disk_cache = False
 
     if result is None and status == "idle":
         cached = data_cache.get("scanner:last_result")
@@ -766,20 +778,22 @@ async def get_scanner_status() -> dict:
             signal_explanations = data_cache.get("scanner:signal_explanations")
             cached_at = cached.get("timestamp") if isinstance(cached, dict) else None
             result_timestamp = result_timestamp or cached_at
+            from_disk_cache = True
 
-    return {
+    payload = {
         "status": status,
-        "progress": _scanner_state["progress"],
-        "total": _scanner_state["total"],
-        "step": _scanner_state.get("step", ""),
-        "universe_size": _scanner_state.get("universe_size", 0),
+        "progress": state.get("progress", 0),
+        "total": state.get("total", 0),
+        "step": state.get("step", ""),
+        "universe_size": state.get("universe_size", 0),
         "result": result,
         "result_timestamp": result_timestamp,
         "cached_at": cached_at,
         "ai_summary": ai_summary,
         "signal_explanations": signal_explanations,
-        "error": _scanner_state["error"],
+        "error": state.get("error"),
     }
+    return ok(payload, cached=from_disk_cache)
 
 
 @router.get("/stream")
@@ -790,34 +804,39 @@ async def stream_scan():
     async def _event_stream():
         prev_snapshot = ""
         while True:
+            state = _scanner_state.get()
+            status = state.get("status", "idle")
             snap = {
-                "status": _scanner_state["status"],
-                "progress": _scanner_state["progress"],
-                "total": _scanner_state["total"],
-                "step": _scanner_state.get("step", ""),
-                "universe_size": _scanner_state.get("universe_size", 0),
-                "error": _scanner_state["error"],
+                "status": status,
+                "progress": state.get("progress", 0),
+                "total": state.get("total", 0),
+                "step": state.get("step", ""),
+                "universe_size": state.get("universe_size", 0),
+                "error": state.get("error"),
             }
             encoded = json.dumps(snap, default=str)
 
-            if _scanner_state["status"] == "done":
-                snap["result"] = _scanner_state["result"]
-                snap["result_timestamp"] = _scanner_state.get("result_timestamp")
-                snap["ai_summary"] = _scanner_state.get("ai_summary")
-                snap["signal_explanations"] = _scanner_state.get("signal_explanations")
+            if status == "done":
+                res = state.get("result")
+                if res is None:
+                    res = _scanner_state.get_result()
+                snap["result"] = res
+                snap["result_timestamp"] = state.get("result_timestamp")
+                snap["ai_summary"] = state.get("ai_summary")
+                snap["signal_explanations"] = state.get("signal_explanations")
                 yield f"data: {json.dumps(snap, default=str)}\n\n"
                 return
 
-            if _scanner_state["status"] == "error":
+            if status == "error":
                 yield f"data: {encoded}\n\n"
                 return
 
-            if _scanner_state["status"] == "idle":
+            if status == "idle":
                 cached = data_cache.get("scanner:last_result")
                 if cached:
                     snap["status"] = "done"
                     snap["result"] = cached
-                    snap["result_timestamp"] = _scanner_state.get("result_timestamp")
+                    snap["result_timestamp"] = state.get("result_timestamp")
                     snap["ai_summary"] = data_cache.get("scanner:ai_summary")
                     snap["signal_explanations"] = data_cache.get("scanner:signal_explanations")
                     yield f"data: {json.dumps(snap, default=str)}\n\n"

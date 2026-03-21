@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Query
 
+from backend.api.envelope import err, ok
 from backend.data.cache import data_cache
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
@@ -31,7 +32,7 @@ async def get_pipeline_status() -> dict:
             }
         else:
             status[short_name] = {"cached": False, "refreshed_at": None}
-    return status
+    return ok(status)
 
 
 @router.post("/refresh")
@@ -42,7 +43,7 @@ async def trigger_pipeline_refresh() -> dict:
     from backend.pipeline import refresh_all
 
     threading.Thread(target=refresh_all, daemon=True).start()
-    return {"status": "started"}
+    return ok({"status": "started"})
 
 
 @router.get("/flow")
@@ -53,12 +54,14 @@ async def get_flow_summary(
     if not refresh:
         cached = data_cache.get("pipeline:flow")
         if cached and isinstance(cached, dict):
-            return cached
+            return ok(cached, cached=True)
 
     from backend.pipeline import refresh_flow
 
     result = refresh_flow()
-    return result or {"data": None, "refreshed_at": None, "error": "SteadyAPI disabled or unavailable"}
+    if not result:
+        return err("flow_unavailable", "SteadyAPI disabled or unavailable", status=503)
+    return ok(result)
 
 
 @router.get("/earnings-calendar")
@@ -69,9 +72,11 @@ async def get_earnings_calendar(
     if not refresh:
         cached = data_cache.get("pipeline:earnings_calendar")
         if cached and isinstance(cached, dict):
-            return cached
+            return ok(cached, cached=True)
 
     from backend.pipeline import refresh_earnings_calendar
 
     result = refresh_earnings_calendar()
-    return result or {"data": [], "refreshed_at": None, "error": "FMP unavailable"}
+    if not result:
+        return err("earnings_unavailable", "FMP unavailable", status=503)
+    return ok(result)

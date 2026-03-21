@@ -6,13 +6,13 @@ Nothing in the system uses a hardcoded threshold.
 """
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 import pandas as pd
 
 
-class VolRegime(str, Enum):
+class VolRegime(StrEnum):
     ULTRA_LOW = "ultra_low"  # VIX < 12
     LOW = "low"  # VIX 12-16
     NORMAL = "normal"  # VIX 16-22

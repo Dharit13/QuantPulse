@@ -202,7 +202,7 @@ def refresh_fundamentals() -> None:
     if not tickers:
         return
 
-    sb = get_supabase()
+    get_supabase()
     now = datetime.now(UTC).isoformat()
     updated = 0
 
@@ -264,7 +264,7 @@ def refresh_earnings() -> None:
     if not tickers:
         return
 
-    sb = get_supabase()
+    get_supabase()
     now = datetime.now(UTC).isoformat()
     updated = 0
 
@@ -444,8 +444,8 @@ def refresh_news_sentiment() -> None:
             n = len(results)
             avg_compound = sum(r.compound for r in results) / n
 
-            positives = sum(1 for r in results if r.label == "positive")
-            negatives = sum(1 for r in results if r.label == "negative")
+            sum(1 for r in results if r.label == "positive")
+            sum(1 for r in results if r.label == "negative")
 
             if avg_compound >= STRONG_POS:
                 label = "bullish"

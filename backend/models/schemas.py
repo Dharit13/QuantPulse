@@ -1,11 +1,11 @@
-from datetime import date, datetime, timezone
-from enum import Enum
+from datetime import UTC, date, datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-class Regime(str, Enum):
+class Regime(StrEnum):
     BULL_TREND = "bull_trend"
     BULL_CHOPPY = "bull_choppy"
     BEAR_TREND = "bear_trend"
@@ -13,7 +13,7 @@ class Regime(str, Enum):
     MEAN_REVERTING = "mean_reverting"
 
 
-class StrategyName(str, Enum):
+class StrategyName(StrEnum):
     STAT_ARB = "stat_arb"
     CATALYST = "catalyst"
     CROSS_ASSET = "cross_asset"
@@ -21,7 +21,7 @@ class StrategyName(str, Enum):
     INTRADAY = "intraday"
 
 
-class VolRegime(str, Enum):
+class VolRegime(StrEnum):
     ULTRA_LOW = "ultra_low"
     LOW = "low"
     NORMAL = "normal"
@@ -47,7 +47,7 @@ class TradeSignal(BaseModel):
     kill_condition: str
     expected_sharpe: float
     signal_score: float = Field(ge=0.0, le=100.0, default=50.0)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ── Portfolio State ──
@@ -268,7 +268,7 @@ class BacktestResult(BaseModel):
     monthly_returns: list[dict]
     regime_performance: dict[str, dict]
     validation: dict
-    run_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    run_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ── Signal Sub-Models ──

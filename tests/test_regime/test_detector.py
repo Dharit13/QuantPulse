@@ -2,7 +2,6 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from backend.models.schemas import Regime
 from backend.regime.detector import detect_regime

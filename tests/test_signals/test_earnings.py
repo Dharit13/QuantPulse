@@ -1,6 +1,5 @@
 """Tests for earnings signal functions."""
 
-import pytest
 
 from backend.signals.earnings import score_earnings_surprise
 

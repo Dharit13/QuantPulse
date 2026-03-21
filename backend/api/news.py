@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
+from backend.api.envelope import ok
 from backend.data.cache import data_cache
 
 router = APIRouter(prefix="/news", tags=["news"])
@@ -31,7 +32,7 @@ def _parse_item(raw: dict, ticker: str) -> dict | None:
     if isinstance(pub_date, str) and pub_date:
         published_at = pub_date
     elif isinstance(pub_date, (int, float)):
-        published_at = datetime.fromtimestamp(pub_date, tz=timezone.utc).isoformat()
+        published_at = datetime.fromtimestamp(pub_date, tz=UTC).isoformat()
 
     return {
         "title": title,
@@ -85,10 +86,10 @@ def _fetch_market_news_full() -> list[dict]:
 async def get_market_news():
     cached = data_cache.get(_CACHE_KEY)
     if cached is not None:
-        return {"items": cached, "cached": True}
+        return ok({"items": cached}, cached=True)
 
     items = _fetch_market_news_full()
     if items:
         data_cache.set(_CACHE_KEY, items, ttl_hours=_CACHE_TTL_HOURS)
 
-    return {"items": items, "cached": False}
+    return ok({"items": items})

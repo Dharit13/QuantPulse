@@ -68,7 +68,7 @@ class CatalystEventStrategy(BaseStrategy):
                 logger.exception("Failed to fetch S&P 500, using empty ticker list")
                 tickers = []
 
-        total = self._progress_total or len(tickers)
+        self._progress_total or len(tickers)
         cb = self._progress_cb
         params = self.get_params(vol)
         kelly = compute_adaptive_kelly(

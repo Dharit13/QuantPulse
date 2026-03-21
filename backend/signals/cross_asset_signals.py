@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 import pandas as pd
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 ZSCORE_LOOKBACK = 60
 
 
-class MacroSignalType(str, Enum):
+class MacroSignalType(StrEnum):
     YIELD_10Y = "yield_10y"
     YIELD_CURVE = "yield_curve"
     VIX_TERM = "vix_term"

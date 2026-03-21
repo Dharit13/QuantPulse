@@ -1,16 +1,16 @@
 """Alert type definitions — what the system can notify you about."""
 
-from enum import Enum
+from enum import StrEnum
 
 
-class AlertPriority(str, Enum):
+class AlertPriority(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     URGENT = "urgent"
 
 
-class AlertType(str, Enum):
+class AlertType(StrEnum):
     MORNING_BRIEF = "morning_brief"
     NEW_SIGNAL = "new_signal"
     ENTRY_ZONE_HIT = "entry_zone_hit"

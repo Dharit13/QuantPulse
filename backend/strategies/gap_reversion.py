@@ -166,7 +166,7 @@ class GapReversionStrategy(BaseStrategy):
         # Targets: full gap fill (prev close) and 50% fill
         gap_dollars = premarket_price - prev_close
         target_full = prev_close
-        target_partial = premarket_price - gap_dollars * 0.5
+        premarket_price - gap_dollars * 0.5
 
         # Stop: gap extension by stop_pct_of_gap
         stop_extension = abs(gap_dollars) * params["stop_pct_of_gap"]

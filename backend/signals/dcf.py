@@ -210,13 +210,13 @@ def _simple_dcf(
 
         # ── Discount rate: CAPM-based WACC ──
         # Risk-free rate ~4.5% (10Y Treasury), equity risk premium ~5.5%
-        RISK_FREE = 0.045
-        EQUITY_PREMIUM = 0.055
+        risk_free = 0.045
+        equity_premium = 0.055
         beta = fundamentals.get("beta")
         if isinstance(beta, (int, float)) and beta > 0:
-            cost_of_equity = RISK_FREE + beta * EQUITY_PREMIUM
+            cost_of_equity = risk_free + beta * equity_premium
         else:
-            cost_of_equity = RISK_FREE + 1.0 * EQUITY_PREMIUM
+            cost_of_equity = risk_free + 1.0 * equity_premium
 
         # Approximate WACC: blend equity and debt cost based on debt/equity mix
         total_debt = balance.get("total_debt", 0) or 0
