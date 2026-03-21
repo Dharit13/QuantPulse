@@ -1,64 +1,86 @@
 """ARQ worker — processes background tasks from the Redis queue.
 
-Run as: uv run python -m backend.tasks.worker
-Or via the worker.py entry point.
+Each task function mirrors the background work from the API modules
+but routes state updates through TaskState for cross-process visibility.
 """
 
 import logging
 from typing import Any
 
+from backend.tasks.state import TaskState
+
 logger = logging.getLogger(__name__)
 
 
-async def task_run_scan(ctx: dict | None, scan_type: str = "scanner", **kwargs: Any) -> dict:
-    """Run a scanner/swing scan as a background task."""
-    from backend.pipeline import refresh_medium
+async def task_run_scan(ctx: dict | None, max_signals: int = 10, min_score: float = 60.0, **kwargs: Any) -> dict:
+    """Run a full scanner scan as a background task."""
+    state = TaskState("scanner")
+    state.update(status="scanning", progress=0, total=0, error=None)
 
-    logger.info("Task: running scan (%s)", scan_type)
     try:
-        refresh_medium()
-        return {"status": "complete", "scan_type": scan_type}
+        from backend.api.scanner import _run_scanner_background
+
+        _run_scanner_background(max_signals, min_score)
+        return {"status": "complete"}
     except Exception as e:
+        state.update(status="error", error=str(e))
         logger.error("Task scan failed: %s", e)
         raise
 
 
 async def task_run_analysis(ctx: dict | None, ticker: str = "", capital: float = 10000, **kwargs: Any) -> dict:
     """Run single-stock analysis as a background task."""
-    logger.info("Task: analyzing %s", ticker)
-    try:
-        from backend.api.analyzer import _run_analysis_sync
+    state = TaskState("analysis")
+    state.update(status="scanning", ticker=ticker, progress=0, error=None)
 
-        result = _run_analysis_sync(ticker, capital)
-        return {"status": "complete", "ticker": ticker, "result": result}
+    try:
+        from backend.api.analyzer import _run_analysis_background
+
+        _run_analysis_background(ticker, capital)
+        return {"status": "complete", "ticker": ticker}
     except Exception as e:
+        state.update(status="error", error=str(e))
         logger.error("Task analysis failed for %s: %s", ticker, e)
         raise
 
 
 async def task_run_portfolio(ctx: dict | None, capital: float = 10000, **kwargs: Any) -> dict:
     """Run portfolio allocation as a background task."""
-    logger.info("Task: portfolio allocation ($%.0f)", capital)
-    try:
-        from backend.api.portfolio import _run_allocate_sync
+    state = TaskState("portfolio")
+    state.update(status="scanning", progress=0, error=None)
 
-        result = _run_allocate_sync(capital)
-        return {"status": "complete", "result": result}
+    try:
+        from backend.api.portfolio import _run_portfolio_background
+
+        _run_portfolio_background(capital)
+        return {"status": "complete"}
     except Exception as e:
+        state.update(status="error", error=str(e))
         logger.error("Task portfolio failed: %s", e)
         raise
 
 
-async def task_ai_summarize(ctx: dict | None, data: dict | None = None, **kwargs: Any) -> dict:
-    """Run AI summarization as a background task."""
-    logger.info("Task: AI summarize")
+async def task_run_sectors(ctx: dict | None, refresh: bool = False, **kwargs: Any) -> dict:
+    """Run sector recommendations as a background task."""
     try:
-        from backend.ai.market_ai import ai_market_summary
+        from backend.api.sectors import _run_recs_background
 
-        result = ai_market_summary(data or {})
-        return {"status": "complete", "result": result}
+        _run_recs_background(refresh)
+        return {"status": "complete"}
     except Exception as e:
-        logger.error("Task AI summarize failed: %s", e)
+        logger.error("Task sectors failed: %s", e)
+        raise
+
+
+async def task_run_swing(ctx: dict | None, min_return_pct: float = 30.0, max_hold_days: int = 10, **kwargs: Any) -> dict:
+    """Run swing picks scan as a background task."""
+    try:
+        from backend.api.swing_picks import _run_scan_background
+
+        _run_scan_background(min_return_pct, max_hold_days)
+        return {"status": "complete"}
+    except Exception as e:
+        logger.error("Task swing failed: %s", e)
         raise
 
 
@@ -66,16 +88,17 @@ TASK_FUNCTIONS = {
     "task_run_scan": task_run_scan,
     "task_run_analysis": task_run_analysis,
     "task_run_portfolio": task_run_portfolio,
-    "task_ai_summarize": task_ai_summarize,
+    "task_run_sectors": task_run_sectors,
+    "task_run_swing": task_run_swing,
 }
 
 
 class WorkerSettings:
-    """ARQ worker settings — discovers tasks and connects to Redis."""
+    """ARQ worker settings."""
 
     functions = list(TASK_FUNCTIONS.values())
     max_jobs = 4
-    job_timeout = 300
+    job_timeout = 600
     max_tries = 3
     health_check_interval = 30
 
@@ -102,9 +125,6 @@ class WorkerSettings:
             password_part = None
 
         return RedisSettings(host=host, port=port, password=password_part)
-
-    on_startup = None
-    on_shutdown = None
 
 
 if __name__ == "__main__":

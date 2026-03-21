@@ -11,7 +11,8 @@ async function fetchRegime() {
       cache: "no-store",
     });
     if (!res.ok) return null;
-    return res.json();
+    const body = await res.json();
+    return body?.data ?? body;
   } catch {
     return null;
   }
@@ -21,8 +22,9 @@ async function fetchNews() {
   try {
     const res = await fetch(`${API_BASE}/news/market`, { cache: "no-store" });
     if (!res.ok) return null;
-    const data = await res.json();
-    return data?.items ?? null;
+    const body = await res.json();
+    const payload = body?.data ?? body;
+    return payload?.items ?? null;
   } catch {
     return null;
   }

@@ -20,12 +20,14 @@ from fastapi.responses import StreamingResponse
 from backend.adaptive.vol_context import compute_vol_context
 from backend.adaptive.weight_interpolation import compute_blended_weights
 from backend.ai.market_ai import ai_investment_research
+from backend.api.envelope import ok
 from backend.data.fetcher import DataFetcher
 from backend.models.schemas import PortfolioState, Regime, StrategyName, TradeSignal
 from backend.regime.detector import detect_regime
 from backend.risk.correlation import check_new_position_correlation
 from backend.risk.manager import risk_manager
 from backend.risk.var import compute_portfolio_var
+from backend.tasks.state import TaskState
 from backend.tracker.strategy_health import compute_strategy_health
 from backend.tracker.trade_journal import TradeJournal
 
@@ -58,13 +60,13 @@ async def get_portfolio_state(
 
         cached = data_cache.get("pipeline:portfolio")
         if cached and isinstance(cached, dict):
-            return cached
+            return ok(cached, cached=True)
 
     from backend.pipeline import refresh_portfolio
 
     result = refresh_portfolio()
     if result:
-        return result
+        return ok(result)
 
     vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=False)
     spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=False)
@@ -121,27 +123,29 @@ async def get_portfolio_state(
 
     current_drawdown_pct = abs(risk_manager._compute_drawdown())
 
-    return {
-        "data": PortfolioState(
-            regime=regime,
-            regime_confidence=confidence,
-            gross_exposure=round(gross, 4),
-            net_exposure=round(net, 4),
-            daily_var=round(daily_var, 4),
-            current_drawdown_pct=round(current_drawdown_pct, 4),
-            active_trades=active_signals,
-            strategy_pnl=strategy_pnl,
-            total_pnl_ytd=summary.get("total_pnl_dollars", 0),
-            portfolio_sharpe_30d=0.0,
-        ).model_dump(mode="json"),
-        "refreshed_at": datetime.now(UTC).isoformat(),
-    }
+    return ok(
+        {
+            "data": PortfolioState(
+                regime=regime,
+                regime_confidence=confidence,
+                gross_exposure=round(gross, 4),
+                net_exposure=round(net, 4),
+                daily_var=round(daily_var, 4),
+                current_drawdown_pct=round(current_drawdown_pct, 4),
+                active_trades=active_signals,
+                strategy_pnl=strategy_pnl,
+                total_pnl_ytd=summary.get("total_pnl_dollars", 0),
+                portfolio_sharpe_30d=0.0,
+            ).model_dump(mode="json"),
+            "refreshed_at": datetime.now(UTC).isoformat(),
+        }
+    )
 
 
 @router.get("/alerts")
-async def check_alerts() -> list[dict]:
+async def check_alerts() -> dict:
     """Check active trades for stop/target/time alerts."""
-    return _journal.check_active_trade_alerts()
+    return ok(_journal.check_active_trade_alerts())
 
 
 def _build_quick_portfolio(capital: float) -> dict:
@@ -296,27 +300,36 @@ async def quick_allocate(
 
         cached = data_cache.get("portfolio:last_result")
         if cached and isinstance(cached, dict):
-            return {"data": cached, "refreshed_at": cached.get("timestamp", datetime.now(UTC).isoformat())}
+            return ok(
+                {
+                    "data": cached,
+                    "refreshed_at": cached.get("timestamp", datetime.now(UTC).isoformat()),
+                },
+                cached=True,
+            )
 
     import asyncio
 
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(_executor, _build_quick_portfolio, capital)
-    return {"data": result, "refreshed_at": datetime.now(UTC).isoformat()}
+    return ok({"data": result, "refreshed_at": datetime.now(UTC).isoformat()})
 
 
 # ── Background portfolio build ──
 
-_portfolio_state: dict = {
-    "status": "idle",
-    "progress": 0,
-    "total": 100,
-    "step": "",
-    "result": None,
-    "result_timestamp": None,
-    "ai_research": None,
-    "error": None,
-}
+_portfolio_state = TaskState("portfolio")
+
+
+class _TaskStateWriter:
+    """ScanProgressTracker writes via __setitem__; TaskState uses update()."""
+
+    __slots__ = ("_ts",)
+
+    def __init__(self, ts: TaskState) -> None:
+        self._ts = ts
+
+    def __setitem__(self, key: str, value) -> None:
+        self._ts.update(**{key: value})
 
 
 def _sentiment_candidates(scored: dict[str, dict], wf_params: dict) -> list[dict]:
@@ -414,11 +427,8 @@ def _sector_dedup(scored: dict[str, dict], wf_params: dict) -> dict[str, dict]:
 def _run_portfolio_background(capital: float) -> None:
     from backend.progress import ScanProgressTracker
 
-    global _portfolio_state
     try:
-        _portfolio_state["status"] = "scanning"
-        _portfolio_state["error"] = None
-        _portfolio_state["ai_research"] = None
+        _portfolio_state.update(status="scanning", error=None, ai_summary=None)
 
         tracker = ScanProgressTracker.create(
             [
@@ -427,7 +437,7 @@ def _run_portfolio_background(capital: float) -> None:
                 ("build", 5),
                 ("ai_research", 30),
             ],
-            _portfolio_state,
+            _TaskStateWriter(_portfolio_state),
             "progress:portfolio",
         )
 
@@ -577,8 +587,9 @@ def _run_portfolio_background(capital: float) -> None:
         tracker.start_phase("build", "Building regime-weighted allocation...")
 
         if not scored:
-            _portfolio_state["result"] = {"picks": [], "capital": capital, "regime": regime.value}
-            _portfolio_state["status"] = "done"
+            _portfolio_state.set_result(
+                {"picks": [], "capital": capital, "regime": regime.value},
+            )
             return
 
         # Get regime strategy weights for allocation
@@ -895,18 +906,14 @@ def _run_portfolio_background(capital: float) -> None:
         tracker.finish()
         tracker.save_history("progress:portfolio")
 
-        _portfolio_state["result"] = result
-        _portfolio_state["result_timestamp"] = datetime.now(UTC).isoformat()
-        _portfolio_state["ai_research"] = ai_research
-        _portfolio_state["status"] = "done"
+        _portfolio_state.set_result(result, ai_summary=ai_research)
         from backend.data.cache import data_cache
 
         data_cache.set("portfolio:last_result", result, ttl_hours=24.0)
         data_cache.set("portfolio:ai_research", ai_research, ttl_hours=24.0)
         logger.info("Background portfolio build done: %d picks", len(ranked))
     except Exception as e:
-        _portfolio_state["status"] = "error"
-        _portfolio_state["error"] = str(e)
+        _portfolio_state.update(status="error", error=str(e))
         logger.exception("Background portfolio build failed")
 
 
@@ -915,25 +922,32 @@ async def start_portfolio_build(
     capital: float = Query(default=1000.0, ge=10.0, le=10_000_000.0),
 ) -> dict:
     """Kick off portfolio build in the background."""
-    if _portfolio_state["status"] == "scanning":
-        return {"status": "already_scanning"}
+    if _portfolio_state.get().get("status") == "scanning":
+        return ok({"status": "already_scanning"})
 
-    _portfolio_state["status"] = "scanning"
-    _portfolio_state["progress"] = 0
-    _portfolio_state["step"] = ""
-    _portfolio_state["result"] = None
-    _portfolio_state["ai_research"] = None
+    _portfolio_state.update(
+        status="scanning",
+        progress=0,
+        total=100,
+        step="",
+        result=None,
+        error=None,
+        ai_summary=None,
+    )
     _executor.submit(_run_portfolio_background, capital)
-    return {"status": "started"}
+    return ok({"status": "started"})
 
 
 @router.get("/quick-allocate/status")
 async def get_portfolio_build_status() -> dict:
     """Poll portfolio build progress."""
-    status = _portfolio_state["status"]
-    result = _portfolio_state["result"] if status == "done" else None
-    ai_research = _portfolio_state.get("ai_research")
-    result_timestamp = _portfolio_state.get("result_timestamp")
+    state = _portfolio_state.get()
+    status = state.get("status") or "idle"
+    result = None
+    if status == "done":
+        result = state.get("result") or _portfolio_state.get_result()
+    ai_research = state.get("ai_summary")
+    result_timestamp = state.get("result_timestamp")
     cached_at: str | None = None
 
     if result is None and status == "idle":
@@ -946,17 +960,20 @@ async def get_portfolio_build_status() -> dict:
             cached_at = datetime.now(UTC).isoformat()
             result_timestamp = result_timestamp or cached_at
 
-    return {
+    payload = {
         "status": status,
-        "progress": _portfolio_state["progress"],
-        "total": _portfolio_state["total"],
-        "step": _portfolio_state.get("step", ""),
+        "progress": state.get("progress", 0),
+        "total": state.get("total", 100),
+        "step": state.get("step", ""),
         "result": result,
         "result_timestamp": result_timestamp,
         "cached_at": cached_at,
         "ai_summary": ai_research,
-        "error": _portfolio_state["error"],
+        "error": state.get("error"),
     }
+    if cached_at is not None:
+        return ok(payload, cached=True)
+    return ok(payload)
 
 
 @router.get("/quick-allocate/stream")
@@ -966,34 +983,36 @@ async def stream_portfolio_build():
     async def _event_stream():
         prev_snapshot = ""
         while True:
+            state = _portfolio_state.get()
+            st = state.get("status") or "idle"
             snap = {
-                "status": _portfolio_state["status"],
-                "progress": _portfolio_state["progress"],
-                "total": _portfolio_state["total"],
-                "step": _portfolio_state.get("step", ""),
-                "error": _portfolio_state["error"],
+                "status": st,
+                "progress": state.get("progress", 0),
+                "total": state.get("total", 100),
+                "step": state.get("step", ""),
+                "error": state.get("error"),
             }
             encoded = json.dumps(snap, default=str)
 
-            if _portfolio_state["status"] == "done":
-                snap["result"] = _portfolio_state["result"]
-                snap["result_timestamp"] = _portfolio_state.get("result_timestamp")
-                snap["ai_summary"] = _portfolio_state.get("ai_research")
+            if st == "done":
+                snap["result"] = state.get("result") or _portfolio_state.get_result()
+                snap["result_timestamp"] = state.get("result_timestamp")
+                snap["ai_summary"] = state.get("ai_summary")
                 yield f"data: {json.dumps(snap, default=str)}\n\n"
                 return
 
-            if _portfolio_state["status"] == "error":
+            if st == "error":
                 yield f"data: {encoded}\n\n"
                 return
 
-            if _portfolio_state["status"] == "idle":
+            if st == "idle":
                 from backend.data.cache import data_cache
 
                 cached = data_cache.get("portfolio:last_result")
                 if cached:
                     snap["status"] = "done"
                     snap["result"] = cached
-                    snap["result_timestamp"] = _portfolio_state.get("result_timestamp")
+                    snap["result_timestamp"] = state.get("result_timestamp")
                     snap["ai_summary"] = data_cache.get("portfolio:ai_research")
                     yield f"data: {json.dumps(snap, default=str)}\n\n"
                     return

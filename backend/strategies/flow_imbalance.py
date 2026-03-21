@@ -159,7 +159,7 @@ class FlowImbalanceStrategy(BaseStrategy):
             entry["top_sweeps"].append(sweep)
 
         for ticker, flow in ticker_flow.items():
-            net_premium = flow["call_premium"] - flow["put_premium"]
+            flow["call_premium"] - flow["put_premium"]
             total_premium = flow["call_premium"] + flow["put_premium"]
 
             if total_premium < MIN_SWEEP_PREMIUM:

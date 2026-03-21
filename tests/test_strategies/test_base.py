@@ -2,7 +2,6 @@
 
 import pytest
 
-from backend.adaptive.vol_context import VolContext
 from backend.models.schemas import StrategyName, TradeSignal
 from backend.strategies.base import BaseStrategy
 from backend.strategies.catalyst_event import CatalystEventStrategy

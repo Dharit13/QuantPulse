@@ -24,6 +24,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from backend.ai.market_ai import ai_swing_summary
+from backend.api.envelope import ok
 from backend.data.cache import data_cache
 from backend.data.fetcher import DataFetcher
 from backend.data.sentiment_cache import sentiment_cache
@@ -955,11 +956,13 @@ async def start_swing_scan(
     """Kick off a swing scan in the background. Returns immediately."""
     with _scan_lock:
         if _scan_state["status"] == "scanning":
-            return {
-                "status": "already_scanning",
-                "progress": _scan_state["progress"],
-                "total": _scan_state["total"],
-            }
+            return ok(
+                {
+                    "status": "already_scanning",
+                    "progress": _scan_state["progress"],
+                    "total": _scan_state["total"],
+                }
+            )
 
         _scan_state["status"] = "scanning"
         _scan_state["progress"] = 0
@@ -968,7 +971,7 @@ async def start_swing_scan(
         _scan_state["ai_summary"] = None
 
     _executor.submit(_run_scan_background, min_return_pct, max_hold_days)
-    return {"status": "started"}
+    return ok({"status": "started"})
 
 
 @router.get("/status")
@@ -979,27 +982,32 @@ async def get_scan_status() -> dict:
     ai_summary = _scan_state.get("ai_summary")
     result_timestamp = _scan_state.get("result_timestamp")
     cached_at: str | None = None
+    from_cache = False
 
     if result is None and status == "idle":
         cached = data_cache.get("swing:last_result")
         if cached:
             result = cached
+            from_cache = True
             ai_summary = data_cache.get("swing:ai_summary")
             if isinstance(cached, dict) and isinstance(cached.get("scan_stats"), dict):
                 cached_at = cached["scan_stats"].get("timestamp")
             result_timestamp = result_timestamp or cached_at
 
-    return {
-        "status": status,
-        "progress": _scan_state["progress"],
-        "total": _scan_state["total"],
-        "step": _scan_state.get("step", ""),
-        "result": result,
-        "result_timestamp": result_timestamp,
-        "cached_at": cached_at,
-        "ai_summary": ai_summary,
-        "error": _scan_state["error"],
-    }
+    return ok(
+        {
+            "status": status,
+            "progress": _scan_state["progress"],
+            "total": _scan_state["total"],
+            "step": _scan_state.get("step", ""),
+            "result": result,
+            "result_timestamp": result_timestamp,
+            "cached_at": cached_at,
+            "ai_summary": ai_summary,
+            "error": _scan_state["error"],
+        },
+        cached=from_cache,
+    )
 
 
 @router.get("/stream")
@@ -1067,14 +1075,16 @@ async def get_swing_picks(
     if not refresh:
         cached = data_cache.get("pipeline:swing")
         if cached and isinstance(cached, dict):
-            return cached
+            return ok(cached, cached=True)
 
     from backend.pipeline import refresh_swing
 
     result = refresh_swing()
     if result:
-        return result
+        return ok(result)
 
     loop = asyncio.get_event_loop()
     live_result = await loop.run_in_executor(_executor, _run_swing_scan, min_return_pct, max_hold_days)
-    return {"data": live_result, "refreshed_at": datetime.now(UTC).isoformat()}
+    return ok(
+        {"data": live_result, "refreshed_at": datetime.now(UTC).isoformat()}
+    )

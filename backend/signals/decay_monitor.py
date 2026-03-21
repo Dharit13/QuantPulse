@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 import pandas as pd
@@ -41,7 +41,7 @@ CROWDING_THRESHOLD = 0.60
 ROLLING_WINDOWS = (30, 90, 252)
 
 
-class DecayStatus(str, Enum):
+class DecayStatus(StrEnum):
     HEALTHY = "healthy"
     WARNING = "warning"
     CRITICAL = "critical"

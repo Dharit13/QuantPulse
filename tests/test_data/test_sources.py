@@ -9,8 +9,6 @@ from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
-
 
 # ── FMP Source Tests ─────────────────────────────────────────────
 
@@ -225,7 +223,7 @@ class TestFREDSource:
         assert result.iloc[0] == 4.15
 
     def test_get_series_by_name_maps_correctly(self):
-        src = self._make_source()
+        self._make_source()
         from backend.data.sources.fred_src import SERIES_IDS
 
         assert SERIES_IDS["10y_yield"] == "DGS10"

@@ -1,6 +1,5 @@
 """Tests for analyst revision signal functions."""
 
-import pytest
 
 from backend.signals.revisions import compute_revision_breadth
 

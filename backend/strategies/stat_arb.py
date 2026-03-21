@@ -94,7 +94,7 @@ class StatArbStrategy(BaseStrategy):
                 )
 
                 if result["is_valid"]:
-                    spread = compute_spread(s1["Close"], s2["Close"])
+                    compute_spread(s1["Close"], s2["Close"])
                     valid_pairs.append(
                         {
                             "ticker_a": t1,

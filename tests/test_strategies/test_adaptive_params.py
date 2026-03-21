@@ -2,11 +2,8 @@
 
 import pytest
 
-from backend.adaptive.hold_periods import get_adaptive_hold
 from backend.adaptive.kelly_adaptive import compute_adaptive_kelly
 from backend.adaptive.risk_scaling import get_adaptive_risk_limits
-from backend.adaptive.stops import compute_stop
-from backend.adaptive.targets import compute_targets
 from backend.adaptive.thresholds import (
     get_catalyst_params,
     get_cross_asset_params,
@@ -14,7 +11,6 @@ from backend.adaptive.thresholds import (
     get_gap_reversion_params,
     get_stat_arb_params,
 )
-from backend.adaptive.vol_context import VolContext
 
 
 class TestThresholds:

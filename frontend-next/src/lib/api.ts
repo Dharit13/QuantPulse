@@ -48,7 +48,8 @@ async function request<T>(
       console.warn(`[API] ${options?.method ?? "GET"} ${path} → ${res.status}`);
       return null;
     }
-    return res.json();
+    const body = await res.json();
+    return body?.data !== undefined ? body.data : body;
   } catch (err) {
     console.warn(`[API] ${options?.method ?? "GET"} ${path} failed:`, err);
     return null;

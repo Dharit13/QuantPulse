@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, Query
 
+from backend.api.envelope import err, ok
 from backend.data.cache import data_cache
 from backend.models.database import get_supabase
 from backend.models.schemas import Regime, RegimeSnapshot
@@ -67,7 +68,7 @@ async def get_current_regime(
     if not refresh:
         full = data_cache.get("pipeline:regime:full")
         if full and isinstance(full, dict):
-            return full
+            return ok(full, cached=True)
 
     result = None
     if not refresh:
@@ -81,13 +82,13 @@ async def get_current_regime(
         result = refresh_regime()
 
     if not result:
-        return {"error": "Regime detection failed", "regime": "unknown"}
+        return err("regime_failed", "Regime detection failed", status=503)
 
     result["strategy_activity"] = _get_strategy_activity()
     result["strategy_health"] = _get_strategy_health(result.get("regime"))
 
     data_cache.set("pipeline:regime:full", result, ttl_hours=0.2)
-    return result
+    return ok(result)
 
 
 @router.get("/history", response_model=list[RegimeSnapshot])
@@ -95,7 +96,7 @@ async def get_regime_history(limit: int = Query(default=30, ge=1, le=365)) -> li
     """Return recent regime snapshots from the database."""
     sb = get_supabase()
     result = sb.table("regimes").select("*").order("timestamp", desc=True).limit(limit).execute()
-    return [
+    return ok([
         RegimeSnapshot(
             timestamp=r["timestamp"],
             regime=Regime(r["regime"]),
@@ -107,4 +108,4 @@ async def get_regime_history(limit: int = Query(default=30, ge=1, le=365)) -> li
             strategy_weights=json.loads(r["strategy_weights_json"]),
         )
         for r in result.data
-    ]
+    ])

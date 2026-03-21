@@ -7,7 +7,7 @@ Layer 4: Black swan protection (tail hedges)
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 
@@ -59,7 +59,7 @@ class RiskManager:
         # Layer 2: Strategy-level circuit breaker
         strategy = signal.strategy.value
         if strategy in self.strategy_pause_until:
-            if datetime.now(timezone.utc) < self.strategy_pause_until[strategy]:
+            if datetime.now(UTC) < self.strategy_pause_until[strategy]:
                 reasons.append(f"REJECTED: Strategy {strategy} is paused until {self.strategy_pause_until[strategy]}")
                 return {"approved": False, "reasons": reasons, "adjusted_size": 0}
 
@@ -157,10 +157,10 @@ class RiskManager:
         self.strategy_drawdowns[strategy] = pnl_20d
 
         if pnl_20d < -0.10:
-            self.strategy_pause_until[strategy] = datetime.now(timezone.utc) + timedelta(days=20)
+            self.strategy_pause_until[strategy] = datetime.now(UTC) + timedelta(days=20)
             logger.warning("Strategy %s SHUTDOWN: 20-day drawdown %.1f%% — paused 20 days", strategy, pnl_20d * 100)
         elif pnl_20d < -0.05:
-            self.strategy_pause_until[strategy] = datetime.now(timezone.utc) + timedelta(days=5)
+            self.strategy_pause_until[strategy] = datetime.now(UTC) + timedelta(days=5)
             logger.warning("Strategy %s PAUSED: 20-day drawdown %.1f%% — paused 5 days", strategy, pnl_20d * 100)
 
     def _compute_drawdown(self) -> float:

@@ -1,8 +1,6 @@
 """Tests for the multi-layer risk manager."""
 
-import pytest
 
-from backend.adaptive.vol_context import VolContext
 from backend.models.schemas import StrategyName, TradeSignal
 from backend.risk.manager import RiskManager
 

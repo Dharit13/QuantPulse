@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.adaptive.vol_context import compute_vol_context
 from backend.ai.market_ai import ai_entry_timing
+from backend.api.envelope import ok
 from backend.data.cross_asset import SECTOR_ETFS
 from backend.data.fetcher import DataFetcher
 from backend.data.universe import fetch_sp500_constituents
@@ -403,23 +404,25 @@ async def get_sector_recommendations(
 
         cached = data_cache.get("pipeline:sectors")
         if cached and isinstance(cached, dict):
-            return cached
+            return ok(cached, cached=True)
 
     from backend.pipeline import refresh_sectors
 
     result = refresh_sectors()
     if result:
-        return result
+        return ok(result)
 
     global _cached_result, _cached_at
     loop = asyncio.get_event_loop()
     live_result = await loop.run_in_executor(_executor, _analyze_sectors)
     _cached_result = live_result
     _cached_at = time.time()
-    return {
-        "data": live_result,
-        "refreshed_at": datetime.now(UTC).isoformat(),
-    }
+    return ok(
+        {
+            "data": live_result,
+            "refreshed_at": datetime.now(UTC).isoformat(),
+        }
+    )
 
 
 # ── Background sector recs + SSE ─────────────────────────────
@@ -518,25 +521,27 @@ async def start_recs(
     refresh: bool = Query(False),
 ) -> dict:
     if _recs_state["status"] == "scanning":
-        return {"status": "already_scanning"}
+        return ok({"status": "already_scanning"})
     _recs_state["status"] = "scanning"
     _recs_state["progress"] = 0
     _recs_state["result"] = None
     _recs_state["ai_summary"] = None
     _executor.submit(_run_recs_background, refresh)
-    return {"status": "started"}
+    return ok({"status": "started"})
 
 
 @router.get("/recs-status")
 async def get_recs_status() -> dict:
     result = _recs_state["result"] if _recs_state["status"] == "done" else None
     ai_summary = _recs_state.get("ai_summary")
+    from_cache = False
 
     if result is None and _recs_state["status"] == "idle":
         from backend.data.cache import data_cache
 
         cached = data_cache.get("sectors:last_result")
         if cached:
+            from_cache = True
             result = cached
             ai_summary = data_cache.get("sectors:ai_timing")
             _recs_state["status"] = "done"
@@ -545,7 +550,7 @@ async def get_recs_status() -> dict:
             if not _recs_state.get("result_timestamp"):
                 _recs_state["result_timestamp"] = datetime.now(UTC).isoformat()
 
-    return {
+    payload = {
         "status": _recs_state["status"],
         "progress": _recs_state["progress"],
         "total": _recs_state["total"],
@@ -555,6 +560,7 @@ async def get_recs_status() -> dict:
         "ai_summary": ai_summary,
         "error": _recs_state["error"],
     }
+    return ok(payload, cached=from_cache)
 
 
 @router.get("/stream")

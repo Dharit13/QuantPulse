@@ -1,6 +1,5 @@
 """Tests for regime transition logic and hysteresis."""
 
-import pytest
 
 from backend.adaptive.vol_context import VolContext
 from backend.models.schemas import Regime

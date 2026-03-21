@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from backend.adaptive.vol_context import VolContext
 from backend.config import settings
@@ -36,7 +36,7 @@ class HedgeRecommendation:
     allocation_pct: float  # fraction of capital to allocate
     rationale: str
     priority: str  # "high", "medium", "low"
-    generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass

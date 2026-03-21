@@ -74,7 +74,7 @@ def _refresh_correlation_matrix() -> None:
             from backend.risk.correlation import compute_correlation_matrix
 
             tickers = [t.ticker for t in active]
-            corr = compute_correlation_matrix(tickers)
+            compute_correlation_matrix(tickers)
             logger.info("Correlation matrix updated for %d positions", len(tickers))
     except Exception as e:
         logger.warning("Correlation refresh failed: %s", e)
@@ -397,14 +397,14 @@ def register_all_jobs(scheduler: BackgroundScheduler) -> None:
     scheduler.add_job(_update_phantoms, "cron", hour=18, minute=0, id="phantom_updates", replace_existing=True)
 
     # Calibration jobs that don't overlap with the pipeline
-    PIPELINE_HANDLED = {
+    pipeline_handled = {
         "vol_context",
         "regime_detection",
         "strategy_weights",
     }
 
     for name, cfg in CALIBRATION_SCHEDULE.items():
-        if name in PIPELINE_HANDLED:
+        if name in pipeline_handled:
             logger.info("Skipping job %s — handled by pipeline", name)
             continue
 

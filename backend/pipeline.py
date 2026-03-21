@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from backend.adaptive.vol_context import VolContext, compute_vol_context
 from backend.config import settings
@@ -97,7 +97,7 @@ def refresh_regime(
         adx = indicators.get("adx", {}).get("adx", 20.0) if isinstance(indicators.get("adx"), dict) else 20.0
 
         payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "regime": regime.value,
             "confidence": regime_result["confidence"],
             "regime_probabilities": regime_result["probabilities"],
@@ -105,7 +105,7 @@ def refresh_regime(
             "breadth_pct": breadth,
             "adx": adx,
             "strategy_weights": regime_result.get("strategy_weights", {}),
-            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "refreshed_at": datetime.now(UTC).isoformat(),
         }
 
         import json
@@ -116,7 +116,7 @@ def refresh_regime(
             sb = get_supabase()
             sb.table("regimes").insert(
                 {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "regime": regime.value,
                     "confidence": regime_result["confidence"],
                     "vix": vix_val,
@@ -158,14 +158,14 @@ def refresh_scanner(
         from backend.models.schemas import ScannerResult
 
         result = ScannerResult(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             regime=regime,
             signals=enriched,
             total_signals=len(all_signals),
         )
         payload = {
             "data": result.model_dump(mode="json"),
-            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "refreshed_at": datetime.now(UTC).isoformat(),
         }
         data_cache.set("pipeline:scanner", payload, ttl_hours=TTL_MEDIUM)
         logger.info("Pipeline: scanner refreshed — %d signals (of %d total)", len(enriched), len(all_signals))
@@ -183,7 +183,7 @@ def refresh_sectors() -> dict | None:
         result = _analyze_sectors()
         payload = {
             "data": result,
-            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "refreshed_at": datetime.now(UTC).isoformat(),
         }
         data_cache.set("pipeline:sectors", payload, ttl_hours=TTL_MEDIUM)
         logger.info("Pipeline: sectors refreshed — %d sectors", len(result.get("sectors", [])))
@@ -257,7 +257,7 @@ def refresh_portfolio(
                 "total_pnl_ytd": summary.get("total_pnl_dollars", 0),
                 "portfolio_sharpe_30d": 0.0,
             },
-            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "refreshed_at": datetime.now(UTC).isoformat(),
         }
         data_cache.set("pipeline:portfolio", payload, ttl_hours=TTL_FAST)
         logger.info("Pipeline: portfolio refreshed — %d active trades", len(active_entries))
@@ -275,7 +275,7 @@ def refresh_swing() -> dict | None:
         result = _run_swing_scan(min_return_pct=30.0, max_hold_days=10)
         payload = {
             "data": result,
-            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "refreshed_at": datetime.now(UTC).isoformat(),
         }
         data_cache.set("pipeline:swing", payload, ttl_hours=TTL_MEDIUM)
         quick = len(result.get("quick_trades", []))
@@ -308,7 +308,7 @@ def refresh_flow() -> dict | None:
                 "unusual_activity": unusual[:20],
                 "unusual_count": len(unusual),
             },
-            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "refreshed_at": datetime.now(UTC).isoformat(),
         }
         data_cache.set("pipeline:flow", payload, ttl_hours=TTL_MEDIUM)
         logger.info(
@@ -337,7 +337,7 @@ def refresh_earnings_calendar() -> dict | None:
 
         payload = {
             "data": calendar[:30],
-            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "refreshed_at": datetime.now(UTC).isoformat(),
         }
         data_cache.set("pipeline:earnings_calendar", payload, ttl_hours=TTL_DAILY)
         logger.info("Pipeline: earnings calendar refreshed — %d upcoming", len(calendar[:30]))
@@ -423,13 +423,13 @@ def refresh_fast() -> None:
     """Every 2 min: stock prices, regime, portfolio state.
     Fetches VIX/SPY/FRED once and shares across regime + portfolio.
     """
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     prefetched = _fetch_regime_and_vol()
     regime_payload = refresh_regime(_prefetched=prefetched)
     refresh_portfolio(_prefetched=prefetched)
     if regime_payload:
         refresh_dashboard_ai(regime_payload)
-    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    elapsed = (datetime.now(UTC) - started).total_seconds()
     logger.info("Pipeline[fast]: regime + portfolio + dashboard AI in %.1fs", elapsed)
 
 
@@ -437,23 +437,23 @@ def refresh_medium() -> None:
     """Every 10 min: full scanner, sectors, swing picks.
     Fetches VIX/SPY/FRED once and shares across scanner.
     """
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     prefetched = _fetch_regime_and_vol()
     refresh_scanner(_prefetched=prefetched)
     refresh_sectors()
     refresh_swing()
-    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    elapsed = (datetime.now(UTC) - started).total_seconds()
     logger.info("Pipeline[medium]: scanner + sectors + swing in %.1fs", elapsed)
 
 
 def refresh_all() -> None:
     """Run the full pipeline (all tiers). Used on startup."""
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     logger.info("Pipeline: starting full refresh at %s", started.isoformat())
 
     refresh_fast()
     refresh_medium()
     refresh_earnings_calendar()
 
-    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    elapsed = (datetime.now(UTC) - started).total_seconds()
     logger.info("Pipeline: full refresh completed in %.1fs", elapsed)

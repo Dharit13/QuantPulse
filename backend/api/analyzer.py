@@ -10,18 +10,19 @@ import asyncio
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.adaptive.vol_context import compute_vol_context
+from backend.api.envelope import ok
 from backend.data.fetcher import DataFetcher
 from backend.models.schemas import Regime, TradeSignal
 from backend.regime.detector import detect_regime
 from backend.strategies.catalyst_event import CatalystEventStrategy
 from backend.strategies.cross_asset_momentum import CrossAssetMomentumStrategy
+from backend.tasks.state import TaskState
 
 router = APIRouter(prefix="/analyze", tags=["analyzer"])
 logger = logging.getLogger(__name__)
@@ -1106,26 +1107,27 @@ def _resolve_ticker(raw: str) -> str:
 
 # ── Background analysis + SSE ─────────────────────────────────
 
-_analysis_state: dict = {
-    "status": "idle",
-    "progress": 0,
-    "total": 100,
-    "step": "",
-    "ticker": None,
-    "result": None,
-    "result_timestamp": None,
-    "error": None,
-}
+
+class _AnalysisStateProgressSink:
+    """ScanProgressTracker writes via __setitem__; forward into TaskState.update."""
+
+    __slots__ = ("_ts",)
+
+    def __init__(self, ts: TaskState) -> None:
+        self._ts = ts
+
+    def __setitem__(self, key: str, value: object) -> None:
+        self._ts.update(**{key: value})
+
+
+_analysis_state = TaskState("analysis")
 
 
 def _run_analysis_background(ticker: str, capital: float) -> None:
     from backend.progress import ScanProgressTracker
 
-    global _analysis_state
     try:
-        _analysis_state["status"] = "scanning"
-        _analysis_state["error"] = None
-        _analysis_state["ticker"] = ticker
+        _analysis_state.update(status="scanning", error=None, ticker=ticker)
 
         tracker = ScanProgressTracker.create(
             [
@@ -1137,7 +1139,7 @@ def _run_analysis_background(ticker: str, capital: float) -> None:
                 ("dcf", 5),
                 ("trade_plan", 3),
             ],
-            _analysis_state,
+            _AnalysisStateProgressSink(_analysis_state),
             "progress:analysis",
         )
 
@@ -1145,8 +1147,7 @@ def _run_analysis_background(ticker: str, capital: float) -> None:
         resolved = _resolve_ticker(ticker)
         ohlcv = _fetcher.get_daily_ohlcv(resolved, period="2y", live=True)
         if ohlcv.empty:
-            _analysis_state["status"] = "error"
-            _analysis_state["error"] = f"No data for {resolved}"
+            _analysis_state.update(status="error", error=f"No data for {resolved}")
             return
 
         cached_rv = _get_cached_regime_and_vol()
@@ -1309,13 +1310,10 @@ def _run_analysis_background(ticker: str, capital: float) -> None:
         if resolved != ticker.upper():
             result["resolved_from"] = ticker
 
-        _analysis_state["result"] = result
-        _analysis_state["result_timestamp"] = datetime.now(UTC).isoformat()
-        _analysis_state["status"] = "done"
+        _analysis_state.set_result(result)
         logger.info("Background analysis done for %s", resolved)
     except Exception as e:
-        _analysis_state["status"] = "error"
-        _analysis_state["error"] = str(e)
+        _analysis_state.update(status="error", error=str(e))
         logger.exception("Background analysis failed for %s", ticker)
 
 
@@ -1324,28 +1322,29 @@ async def start_analysis(
     ticker: str = Query(...),
     capital: float = Query(default=10000, ge=1),
 ) -> dict:
-    if _analysis_state["status"] == "scanning":
-        return {"status": "already_scanning", "ticker": _analysis_state.get("ticker")}
-    _analysis_state["status"] = "scanning"
-    _analysis_state["progress"] = 0
-    _analysis_state["result"] = None
-    _analysis_state["ticker"] = ticker
+    state = _analysis_state.get()
+    if state.get("status") == "scanning":
+        return ok({"status": "already_scanning", "ticker": state.get("ticker")})
+    _analysis_state.update(status="scanning", progress=0, result=None, ticker=ticker)
     _executor.submit(_run_analysis_background, ticker, capital)
-    return {"status": "started"}
+    return ok({"status": "started"})
 
 
 @router.get("/status")
 async def get_analysis_status() -> dict:
-    return {
-        "status": _analysis_state["status"],
-        "progress": _analysis_state["progress"],
-        "total": _analysis_state["total"],
-        "step": _analysis_state.get("step", ""),
-        "ticker": _analysis_state.get("ticker"),
-        "result": _analysis_state["result"] if _analysis_state["status"] == "done" else None,
-        "result_timestamp": _analysis_state.get("result_timestamp"),
-        "error": _analysis_state["error"],
-    }
+    state = _analysis_state.get()
+    return ok(
+        {
+            "status": state.get("status", "idle"),
+            "progress": state.get("progress", 0),
+            "total": state.get("total", 100),
+            "step": state.get("step", ""),
+            "ticker": state.get("ticker"),
+            "result": _analysis_state.get_result() if state.get("status") == "done" else None,
+            "result_timestamp": state.get("result_timestamp"),
+            "error": state.get("error"),
+        }
+    )
 
 
 @router.get("/stream")
@@ -1353,25 +1352,27 @@ async def stream_analysis():
     async def _event_stream():
         prev = ""
         while True:
+            state = _analysis_state.get()
             snap = {
-                "status": _analysis_state["status"],
-                "progress": _analysis_state["progress"],
-                "total": _analysis_state["total"],
-                "step": _analysis_state.get("step", ""),
-                "ticker": _analysis_state.get("ticker"),
-                "error": _analysis_state["error"],
+                "status": state.get("status", "idle"),
+                "progress": state.get("progress", 0),
+                "total": state.get("total", 100),
+                "step": state.get("step", ""),
+                "ticker": state.get("ticker"),
+                "error": state.get("error"),
             }
             enc = json.dumps(snap, default=str)
 
-            if _analysis_state["status"] == "done":
-                snap["result"] = _analysis_state["result"]
-                snap["result_timestamp"] = _analysis_state.get("result_timestamp")
+            st = state.get("status", "idle")
+            if st == "done":
+                snap["result"] = _analysis_state.get_result()
+                snap["result_timestamp"] = state.get("result_timestamp")
                 yield f"data: {json.dumps(snap, default=str)}\n\n"
                 return
-            if _analysis_state["status"] == "error":
+            if st == "error":
                 yield f"data: {enc}\n\n"
                 return
-            if _analysis_state["status"] == "idle":
+            if st == "idle":
                 yield f"data: {enc}\n\n"
                 return
             if enc != prev:
@@ -1398,7 +1399,7 @@ async def analyze_stock(ticker: str, capital: float = Query(default=10000, ge=1)
         result = await loop.run_in_executor(_executor, _analyze_sync, resolved, capital)
         if resolved != ticker.upper():
             result["resolved_from"] = ticker
-        return result
+        return ok(result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=f"{str(e)} (input: '{ticker}' → resolved: '{resolved}')")
     except Exception as e:
