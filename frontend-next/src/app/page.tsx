@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Newspaper, ExternalLink } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { PulseLoader, PulseInline } from "@/components/pulse-loader";
 import { AICard } from "@/components/ai-card";
@@ -57,6 +57,14 @@ interface AllocationAI {
   } | null;
 }
 
+interface NewsItem {
+  title: string;
+  source: string;
+  url: string;
+  published_at: string;
+  related_ticker: string;
+}
+
 // ---------------------------------------------------------------------------
 // Module-level cache
 // ---------------------------------------------------------------------------
@@ -68,6 +76,7 @@ interface DashboardCache {
   actionBanner: MarketActionAI["result"] | null;
   allocAI: Record<string, { name: string; explanation: string }>;
   recs: SectorRecommendations | null;
+  news: NewsItem[] | null;
   fetchedAt: string | null;
 }
 
@@ -78,6 +87,7 @@ const _cache: DashboardCache = {
   actionBanner: null,
   allocAI: {},
   recs: null,
+  news: null,
   fetchedAt: null,
 };
 
@@ -173,6 +183,33 @@ function AllocationBar({
 // Constants
 // ---------------------------------------------------------------------------
 
+function timeAgo(dateStr: string): string {
+  if (!dateStr) return "";
+  try {
+    const d = new Date(dateStr);
+    const now = Date.now();
+    const diffMs = now - d.getTime();
+    if (diffMs < 0) return "just now";
+    const mins = Math.floor(diffMs / 60_000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  } catch {
+    return "";
+  }
+}
+
+const TICKER_BADGE_COLORS: Record<string, string> = {
+  SPY: "bg-blue-500/10 text-blue-400",
+  QQQ: "bg-purple-500/10 text-purple-400",
+  DIA: "bg-amber-500/10 text-amber-400",
+  IWM: "bg-emerald-500/10 text-emerald-400",
+  VIX: "bg-rose-500/10 text-rose-400",
+};
+
 const STRAT_COLORS: Record<string, string> = {
   stat_arb: "#38bdf8",
   catalyst: "#34d399",
@@ -218,6 +255,7 @@ export default function MarketOverviewPage() {
   const [regimeAI, setRegimeAI] = useState<RegimeProbsAI["result"] | null>(_cache.regimeAI);
   const [actionBanner, setActionBanner] = useState<MarketActionAI["result"] | null>(_cache.actionBanner);
   const [allocAI, setAllocAI] = useState<Record<string, { name: string; explanation: string }>>(_cache.allocAI);
+  const [news, setNews] = useState<NewsItem[] | null>(_cache.news);
   const [loading, setLoading] = useState(!hasCached);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [picksOpen, setPicksOpen] = useState(true);
@@ -251,6 +289,12 @@ export default function MarketOverviewPage() {
     _cache.fetchedAt = ts;
     setDashboardFetchedAt(ts);
     setLoading(false);
+
+    apiGet<{ items: NewsItem[] }>("/news/market").then((res) => {
+      const items = res?.items ?? null;
+      setNews(items);
+      _cache.news = items;
+    }).catch(() => {});
 
     if (r) {
       const aiPromises = Promise.all([
@@ -512,84 +556,158 @@ export default function MarketOverviewPage() {
       <AnimatePresence>
         {detailsOpen && (
           <motion.div
-            className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4 items-stretch"
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.3, ease: "easeInOut" }}
           >
-            {/* Regime Probabilities */}
-            {probs && Object.keys(probs).length > 0 && (
-              <GradientCard animate={false}>
-                <h3 className="text-[15px] font-semibold text-foreground mb-3">
-                  Regime Probabilities
-                </h3>
-                <div className="space-y-2.5">
-                  {Object.entries(probs)
-                    .sort(([, a], [, b]) => b - a)
-                    .map(([key, prob], i) => {
-                      const label = key
-                        .replace(/_/g, " ")
-                        .replace(/\b\w/g, (c) => c.toUpperCase());
-                      const barColor =
-                        prob >= 0.35 ? "#fb7185"
-                        : prob >= 0.2 ? "#fbbf24"
-                        : "#34d399";
-                      return (
-                        <div key={key}>
-                          <div className="flex justify-between text-[13px] mb-1">
-                            <span className="text-foreground/80 font-medium">{label}</span>
-                            <span className="font-bold text-foreground">
-                              <AnimatedNumber
-                                value={Math.round(prob * 100)}
-                                format={(n) => `${Math.round(n)}%`}
+            {/* Left column: Regime Probabilities + Market News */}
+            <div className="flex flex-col gap-4 h-full">
+              {/* Regime Probabilities */}
+              {probs && Object.keys(probs).length > 0 && (
+                <GradientCard animate={false}>
+                  <h3 className="text-[15px] font-semibold text-foreground mb-3">
+                    Regime Probabilities
+                  </h3>
+                  <div className="space-y-3">
+                    {Object.entries(probs)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([key, prob], i) => {
+                        const label = key
+                          .replace(/_/g, " ")
+                          .replace(/\b\w/g, (c) => c.toUpperCase());
+                        const barColor =
+                          prob >= 0.35 ? "#fb7185"
+                          : prob >= 0.2 ? "#fbbf24"
+                          : "#34d399";
+                        return (
+                          <div key={key}>
+                            <div className="flex items-center justify-between text-[13px] mb-1.5">
+                              <span className="text-foreground/80 font-medium truncate mr-3">{label}</span>
+                              <span className="font-bold text-foreground tabular-nums whitespace-nowrap">
+                                <AnimatedNumber
+                                  value={Math.round(prob * 100)}
+                                  format={(n) => `${Math.round(n)}%`}
+                                />
+                              </span>
+                            </div>
+                            <div className="h-2.5 bg-muted/50 rounded-full overflow-hidden">
+                              <motion.div
+                                className="h-full rounded-full"
+                                style={{ background: barColor }}
+                                initial={{ width: 0 }}
+                                animate={{ width: `${prob * 100}%` }}
+                                transition={{ duration: 0.7, delay: 0.15 + i * 0.06, ease: [0.25, 0.46, 0.45, 0.94] }}
                               />
-                            </span>
+                            </div>
                           </div>
-                          <div className="h-2 bg-muted/50 rounded-full overflow-hidden">
-                            <motion.div
-                              className="h-full rounded-full"
-                              style={{ background: barColor }}
-                              initial={{ width: 0 }}
-                              animate={{ width: `${prob * 100}%` }}
-                              transition={{ duration: 0.7, delay: 0.15 + i * 0.06, ease: [0.25, 0.46, 0.45, 0.94] }}
-                            />
+                        );
+                      })}
+                  </div>
+
+                  {regimeAI?.action ? (
+                    <div className="mt-4 pt-4 border-t border-border space-y-2.5">
+                      <p className="text-[13px] font-medium text-foreground leading-relaxed">{regimeAI.action}</p>
+                      {regimeAI.timing && (
+                        <div className="px-3 py-2.5 bg-emerald-500/5 rounded-xl text-[13px] text-foreground/80 leading-relaxed border border-emerald-500/10">
+                          <span className="font-semibold text-emerald-400">When to buy:</span>{" "}
+                          {regimeAI.timing}
+                        </div>
+                      )}
+                      {regimeAI.news_sentiment && (
+                        <div className="px-3 py-2.5 bg-amber-500/5 rounded-xl text-[13px] text-foreground/80 leading-relaxed border border-amber-500/10">
+                          <span className="font-semibold text-amber-400">Market Mood:</span>{" "}
+                          {regimeAI.news_sentiment}
+                        </div>
+                      )}
+                    </div>
+                  ) : topProb ? (
+                    <div className="mt-4 pt-4 border-t border-border">
+                      <p className="text-[13px] text-foreground/80 leading-relaxed">
+                        Top scenario:{" "}
+                        <span className="font-medium text-foreground">
+                          {topProb[0].replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                        </span>{" "}
+                        ({Math.round(topProb[1] * 100)}%).{" "}
+                        {topProb[1] >= 0.5 ? "System is confident." : "System is unsure — keeping extra cash."}
+                      </p>
+                    </div>
+                  ) : null}
+                </GradientCard>
+              )}
+
+              {/* Finance News */}
+              <GradientCard animate={false} className="flex-1">
+                <div className="flex items-center gap-2 mb-3">
+                  <Newspaper className="h-4 w-4 text-cyan-400" />
+                  <h3 className="text-[15px] font-semibold text-foreground">
+                    Market News
+                  </h3>
+                </div>
+                {!news || news.length === 0 ? (
+                  <div className="py-4 text-center text-[13px] text-foreground/60">
+                    {news === null ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <div className="h-3 w-3 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
+                        Loading headlines...
+                      </div>
+                    ) : (
+                      "No recent headlines available"
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-0 divide-y divide-border/50 flex-1 overflow-y-auto">
+                    {news.slice(0, 10).map((item, i) => (
+                      <motion.div
+                        key={`${item.title}-${i}`}
+                        className="group py-2.5 first:pt-0 last:pb-0"
+                        initial={{ opacity: 0, x: -8 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.3, delay: i * 0.04 }}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            {item.url ? (
+                              <a
+                                href={item.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[13px] font-medium text-foreground leading-snug hover:text-cyan-400 transition-colors line-clamp-2 flex items-start gap-1.5"
+                              >
+                                <span>{item.title}</span>
+                                <ExternalLink className="h-3 w-3 mt-0.5 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" />
+                              </a>
+                            ) : (
+                              <p className="text-[13px] font-medium text-foreground leading-snug line-clamp-2">
+                                {item.title}
+                              </p>
+                            )}
+                            <div className="flex items-center gap-2 mt-1">
+                              {item.related_ticker && (
+                                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md ${TICKER_BADGE_COLORS[item.related_ticker] ?? "bg-muted text-foreground/60"}`}>
+                                  {item.related_ticker}
+                                </span>
+                              )}
+                              {item.source && (
+                                <span className="text-[11px] text-foreground/50">
+                                  {item.source}
+                                </span>
+                              )}
+                              {item.published_at && (
+                                <span className="text-[11px] text-foreground/40">
+                                  {timeAgo(item.published_at)}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      );
-                    })}
-                </div>
-
-                {regimeAI?.action ? (
-                  <div className="mt-3 pt-3 border-t border-border space-y-2">
-                    <div className="text-[13px] font-semibold text-foreground leading-relaxed">{regimeAI.action}</div>
-                    {regimeAI.timing && (
-                      <div className="px-3 py-2 bg-emerald-500/5 rounded-lg text-[13px] text-foreground/80 leading-relaxed border border-emerald-500/10">
-                        <span className="font-semibold text-emerald-400">When to buy:</span>{" "}
-                        {regimeAI.timing}
-                      </div>
-                    )}
-                    {regimeAI.news_sentiment && (
-                      <div className="px-3 py-2 bg-amber-500/5 rounded-lg text-[13px] text-foreground/80 leading-relaxed border-l-2 border-amber-500/40">
-                        <span className="font-semibold text-amber-400">Market Mood:</span>{" "}
-                        {regimeAI.news_sentiment}
-                      </div>
-                    )}
+                      </motion.div>
+                    ))}
                   </div>
-                ) : topProb ? (
-                  <div className="mt-3 pt-3 border-t border-border">
-                    <div className="text-[13px] text-foreground/80 leading-relaxed">
-                      Top scenario:{" "}
-                      <span className="font-medium text-foreground">
-                        {topProb[0].replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
-                      </span>{" "}
-                      ({Math.round(topProb[1] * 100)}%).{" "}
-                      {topProb[1] >= 0.5 ? "System is confident." : "System is unsure — keeping extra cash."}
-                    </div>
-                  </div>
-                ) : null}
+                )}
               </GradientCard>
-            )}
+            </div>
 
             {/* Strategy Allocation */}
             {weights && Object.keys(weights).length > 0 && (

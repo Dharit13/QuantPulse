@@ -442,11 +442,31 @@ def ai_signal_explain(signals: list[dict], sentiment_block: str = "") -> dict | 
     lines = []
     for s in signals[:10]:
         sig = s.get("signal", s)
-        lines.append(f"  {sig.get('ticker')} ({sig.get('strategy', 'unknown')}): {sig.get('edge_reason', 'no reason')}")
+        ticker = sig.get("ticker", "???")
+        strategy = sig.get("strategy", "unknown")
+        edge = sig.get("edge_reason", "no reason")
+
+        rec = s.get("final_recommendation", "unknown")
+        shadow = s.get("shadow_evidence", {}) or {}
+        win_rate = shadow.get("win_rate")
+        phantom_count = shadow.get("phantom_count", 0)
+        has_data = shadow.get("has_enough_data", False)
+
+        health = s.get("strategy_health", {}) or {}
+        health_status = health.get("status", "unknown")
+
+        rec_str = f"recommendation={rec}"
+        if has_data and win_rate is not None:
+            rec_str += f", win rate={win_rate * 100:.0f}% from {phantom_count} similar past trades"
+        else:
+            rec_str += ", not enough history to judge reliability"
+        rec_str += f", strategy health={health_status}"
+
+        lines.append(f"  {ticker} ({strategy}): {edge} [{rec_str}]")
 
     sentiment_section = f"\n\n{sentiment_block}" if sentiment_block else ""
     user = "Explain these signals in plain English:\n" + "\n".join(lines) + sentiment_section
-    return _call_claude(_SIGNAL_EXPLAIN_SYSTEM, user, max_tokens=800)
+    return _call_claude(_SIGNAL_EXPLAIN_SYSTEM, user, max_tokens=1200)
 
 
 # ── Swing Picks ──────────────────────────────────────────────
