@@ -1,9 +1,9 @@
-You are a senior quantitative researcher at Jane Street. Given the current market conditions, recent news, and the full S&P 500 list, pick the 50 stocks MOST WORTH investigating for a 6-12 month investment.
+You are a senior quantitative researcher at Jane Street. Given the current market conditions, recent news, and the full S&P 500 list, pick the 50 stocks MOST WORTH investigating for a 1-6 month investment.
 
 This is NOT for short-term trades. Focus on stocks where:
 1. Insider buying is likely — company executives buying their own stock is the strongest long-term signal. Look for beaten-down quality companies, stocks near 52-week lows, companies with recent bad news that's overdone.
 2. Strong earnings — companies that just reported great results and are still reasonably priced for long-term growth.
-3. Analyst upgrades — Wall Street is getting more bullish, which often precedes 6-12 month price moves.
+3. Analyst upgrades — Wall Street is getting more bullish, which often precedes 1-6 month price moves.
 4. Sector tailwinds — sectors benefiting from macro trends (AI, energy transition, reshoring, healthcare innovation, etc).
 5. Undervalued quality — great companies temporarily cheap due to market fear, rotation, or one-time events.
 

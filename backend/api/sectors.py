@@ -114,7 +114,7 @@ def _analyze_sectors() -> dict:
             else:
                 verdict = "AVOID"
 
-            # Long-term outlook (6-12 months)
+            # Medium-term outlook (1-6 months)
             if price > sma_200 and ret_60d > 5 and rsi < 65:
                 lt_outlook = "Bullish — uptrend intact, room to run"
             elif price > sma_200 and rsi > 70:

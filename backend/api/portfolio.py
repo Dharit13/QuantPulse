@@ -769,7 +769,7 @@ def _run_portfolio_background(capital: float) -> None:
             p["entry"] = round(sig.entry_price, 2) if sig and sig.entry_price else round(price, 2)
             hold_days = sig.max_hold_days if sig else 0
             if hold_days <= 5:
-                p["hold_period"] = "1-5 days" if hold_days > 0 else "6-12 months"
+                p["hold_period"] = "1-5 days" if hold_days > 0 else "1-6 months"
             elif hold_days <= 14:
                 p["hold_period"] = "1-2 weeks"
             elif hold_days <= 30:
@@ -777,7 +777,7 @@ def _run_portfolio_background(capital: float) -> None:
             elif hold_days <= 90:
                 p["hold_period"] = "1-3 months"
             else:
-                p["hold_period"] = "6-12 months"
+                p["hold_period"] = "1-6 months"
             p["strategy"] = p["_strategy"]
 
             if sig and sig.stop_loss:
