@@ -557,7 +557,10 @@ async def scan_universe(
 
     enriched = _enrich_signals(all_signals, vol, regime)
     filtered = [e for e in enriched if e.signal.signal_score >= min_score]
-    filtered.sort(key=lambda e: e.signal.conviction, reverse=True)
+    filtered.sort(
+        key=lambda e: (e.signal.conviction, e.signal.signal_score),
+        reverse=True,
+    )
     filtered = filtered[:max_signals]
 
     result_obj = ScannerResult(
@@ -664,7 +667,10 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
         tracker.start_phase("filter", "Ranking and filtering...")
 
         filtered = [e for e in enriched if e.signal.signal_score >= min_score]
-        filtered.sort(key=lambda e: e.signal.conviction, reverse=True)
+        filtered.sort(
+            key=lambda e: (e.signal.conviction, e.signal.signal_score),
+            reverse=True,
+        )
         filtered = filtered[:max_signals]
 
         result = ScannerResult(
