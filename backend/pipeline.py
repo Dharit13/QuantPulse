@@ -8,6 +8,7 @@ keeping response times instant.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
 
 from backend.adaptive.vol_context import VolContext, compute_vol_context
@@ -19,11 +20,12 @@ from backend.regime.detector import detect_regime
 
 logger = logging.getLogger(__name__)
 
-TTL_FAST = 0.05  # 3 min — for 2-min refresh cycle (stocks, regime, portfolio)
-TTL_MEDIUM = 0.25  # 15 min — for 10-min refresh cycle (scanner, sectors, swing, flow)
+TTL_FAST = 0.2  # 12 min — regime, portfolio (refreshed every 10 min by scheduler)
+TTL_MEDIUM = 0.5  # 30 min — scanner, sectors, swing, flow
 TTL_DAILY = 12.0  # 12 hours — for daily data (earnings calendar)
 
 _fetcher = DataFetcher()
+_regime_lock = threading.Lock()
 
 
 # ── Shared helpers ───────────────────────────────────────────
@@ -32,10 +34,11 @@ _fetcher = DataFetcher()
 def _fetch_regime_and_vol() -> tuple[Regime, VolContext, dict]:
     """Fetch VIX/SPY + FRED macro data, detect regime, compute vol context.
 
-    Returns (regime, vol_context, full_regime_result).
+    Uses live=True to go straight to yfinance (~1s) instead of querying
+    the market_prices DB table which can hang on large tables.
     """
-    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y")
-    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y")
+    vix_df = _fetcher.get_daily_ohlcv("^VIX", period="1y", live=True)
+    spy_df = _fetcher.get_daily_ohlcv("SPY", period="1y", live=True)
 
     yield_curve_slope: float | None = None
     credit_spread_ratio: float | None = None
@@ -66,8 +69,22 @@ def _fetch_regime_and_vol() -> tuple[Regime, VolContext, dict]:
 def refresh_regime(
     _prefetched: tuple[Regime, VolContext, dict] | None = None,
 ) -> dict | None:
-    """Detect current market regime and cache the snapshot."""
+    """Detect current market regime and cache the snapshot.
+
+    Uses a lock to prevent duplicate simultaneous computations — if another
+    thread is already computing, this one waits and returns the cached result.
+    """
+    acquired = _regime_lock.acquire(timeout=120)
+    if not acquired:
+        logger.warning("Pipeline: regime lock timeout, returning cached")
+        cached = data_cache.get("pipeline:regime")
+        return cached if isinstance(cached, dict) else None
+
     try:
+        cached = data_cache.get("pipeline:regime")
+        if cached and isinstance(cached, dict) and not _prefetched:
+            return cached
+
         regime, vol, regime_result = _prefetched or _fetch_regime_and_vol()
 
         indicators = regime_result.get("indicators", {})
@@ -118,6 +135,8 @@ def refresh_regime(
     except Exception as e:
         logger.exception("Pipeline: regime refresh failed: %s", e)
         return None
+    finally:
+        _regime_lock.release()
 
 
 def refresh_scanner(
@@ -212,11 +231,18 @@ def refresh_portfolio(
         short_exp = sum(t.position_size_pct for t in active_entries if t.direction == "short")
         net = long_exp - short_exp
 
-        summary = journal.compute_summary()
+        try:
+            all_closed = journal.get_closed_trades()
+        except Exception:
+            all_closed = []
+
+        summary = journal.compute_summary_from_trades(all_closed)
         strategy_pnl = {}
         for s in StrategyName:
-            strats = list(journal.get_closed_trades(strategy=s))
-            strategy_pnl[s.value] = sum(t.pnl_dollars or 0 for t in strats)
+            strategy_pnl[s.value] = sum(
+                t.pnl_dollars or 0 for t in all_closed
+                if (t.strategy == s or t.strategy == s.value)
+            )
 
         payload = {
             "data": {

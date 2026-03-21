@@ -2,14 +2,20 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { ChevronDown } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { PulseLoader, PulseInline } from "@/components/pulse-loader";
-import { PageHeader } from "@/components/page-header";
-import { MetricCard } from "@/components/metric-card";
 import { AICard } from "@/components/ai-card";
 import { TradeCard } from "@/components/trade-card";
 import { Badge } from "@/components/badge";
 import { MarketActionBanner } from "@/components/market-action-banner";
 import { CacheAge } from "@/components/cache-age";
+import { AnimatedNumber } from "@/components/animated-number";
+import { HeroMetrics } from "@/components/hero-metrics";
+import { GradientCard, GradientButton } from "@/components/gradient-card";
+import { GlowingEffect } from "@/components/ui/glowing-effect";
+import { AllocationDonut } from "@/components/allocation-donut";
+import { SectorTable } from "@/components/sector-table";
+import { MetricTooltip, METRIC_TOOLTIPS } from "@/components/metric-tooltip";
 import { apiGet, apiPost } from "@/lib/api";
 import { formatDollar } from "@/lib/utils";
 import { fallbackEntrySignal, type EntrySignal } from "@/lib/entry-timing";
@@ -20,6 +26,10 @@ import type {
   SectorRecommendations,
   BadgeVariant,
 } from "@/lib/types";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface MarketActionAI {
   result: {
@@ -48,9 +58,9 @@ interface AllocationAI {
 }
 
 // ---------------------------------------------------------------------------
-// Module-level cache — survives React navigation / remounts so the dashboard
-// loads instantly when you come back instead of refetching 4 AI calls.
+// Module-level cache
 // ---------------------------------------------------------------------------
+
 interface DashboardCache {
   regime: RegimeData | null;
   aiResult: AIResult["result"] | null;
@@ -71,6 +81,10 @@ const _cache: DashboardCache = {
   fetchedAt: null,
 };
 
+// ---------------------------------------------------------------------------
+// AllocationBar (used in collapsible section)
+// ---------------------------------------------------------------------------
+
 function AllocationBar({
   label,
   description,
@@ -79,6 +93,7 @@ function AllocationBar({
   signalCount,
   isActive,
   healthStatus,
+  index = 0,
 }: {
   label: string;
   description: string;
@@ -87,13 +102,14 @@ function AllocationBar({
   signalCount?: number;
   isActive?: boolean;
   healthStatus?: string;
+  index?: number;
 }) {
   const healthBadge = healthStatus && healthStatus !== "healthy" && healthStatus !== "unknown" && healthStatus !== "insufficient_data" ? (
     <span
       className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
         healthStatus === "paused"
-          ? "bg-qp-red/10 text-qp-red"
-          : "bg-qp-amber/10 text-qp-amber"
+          ? "bg-rose-500/10 text-rose-400"
+          : "bg-amber-500/10 text-amber-400"
       }`}
     >
       {healthStatus === "paused" ? "paused" : "degraded"}
@@ -101,23 +117,28 @@ function AllocationBar({
   ) : null;
 
   return (
-    <div className="mb-3">
+    <motion.div
+      className="mb-2"
+      initial={{ opacity: 0, x: -10 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.35, delay: index * 0.05, ease: "easeOut" }}
+    >
       <div className="flex justify-between items-center mb-1">
         <div className="flex items-center gap-2">
-          <span className="text-[13px] font-semibold text-text-primary">
+          <span className="text-[13px] font-semibold text-foreground">
             {label}
           </span>
           {isActive !== undefined && (
             <span
               className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
                 isActive
-                  ? "bg-qp-green/10 text-qp-green"
-                  : "bg-card-alt text-text-muted"
+                  ? "bg-emerald-500/10 text-emerald-400"
+                  : "bg-muted text-foreground/70"
               }`}
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
-                  isActive ? "bg-qp-green" : "bg-text-muted"
+                  isActive ? "bg-emerald-400" : "bg-foreground/40"
                 }`}
               />
               {isActive
@@ -127,28 +148,38 @@ function AllocationBar({
           )}
           {healthBadge}
         </div>
-        <span className="text-[13px] font-bold font-mono text-text-primary">
-          {Math.round(pct * 100)}%
+        <span className="text-[13px] font-bold text-foreground">
+          <AnimatedNumber
+            value={Math.round(pct * 100)}
+            format={(n) => `${Math.round(n)}%`}
+          />
         </span>
       </div>
-      <div className="h-2 bg-card-alt rounded-full border border-border overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${pct * 100}%`, background: color }}
+      <div className="h-2 bg-muted/50 rounded-full overflow-hidden">
+        <motion.div
+          className="h-full rounded-full"
+          style={{ background: color }}
+          initial={{ width: 0 }}
+          animate={{ width: `${pct * 100}%` }}
+          transition={{ duration: 0.8, delay: 0.2 + index * 0.05, ease: [0.25, 0.46, 0.45, 0.94] }}
         />
       </div>
-      <div className="text-[12px] text-text-muted mt-0.5">{description}</div>
-    </div>
+      <div className="text-[12px] text-foreground/70 mt-0.5">{description}</div>
+    </motion.div>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
 const STRAT_COLORS: Record<string, string> = {
-  stat_arb: "#3b7dd8",
-  catalyst: "#539616",
-  momentum: "#c6a339",
-  flow: "#6c5ce7",
-  intraday: "#d44040",
-  cash: "#a6a6a0",
+  stat_arb: "#38bdf8",
+  catalyst: "#34d399",
+  momentum: "#fbbf24",
+  flow: "#a78bfa",
+  intraday: "#fb7185",
+  cash: "#94a3b8",
 };
 
 const WEIGHT_KEY_TO_SIGNAL_STRATS: Record<string, string[]> = {
@@ -176,6 +207,10 @@ const STRAT_META: Record<string, [string, string]> = {
   cash: ["Cash Reserve", "Money kept safe on the sideline"],
 };
 
+// ---------------------------------------------------------------------------
+// Page component
+// ---------------------------------------------------------------------------
+
 export default function MarketOverviewPage() {
   const hasCached = _cache.regime !== null;
   const [regime, setRegime] = useState<RegimeData | null>(_cache.regime);
@@ -185,6 +220,7 @@ export default function MarketOverviewPage() {
   const [allocAI, setAllocAI] = useState<Record<string, { name: string; explanation: string }>>(_cache.allocAI);
   const [loading, setLoading] = useState(!hasCached);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [picksOpen, setPicksOpen] = useState(true);
   const [dashboardFetchedAt, setDashboardFetchedAt] = useState<string | null>(_cache.fetchedAt);
 
   const recsScan = useSSEScan<SectorRecommendations>(
@@ -211,9 +247,17 @@ export default function MarketOverviewPage() {
     setRegime(r);
     _cache.regime = r;
 
+    const ts = new Date().toISOString();
+    _cache.fetchedAt = ts;
+    setDashboardFetchedAt(ts);
+    setLoading(false);
+
     if (r) {
-      const [ai, regimeProbs, allocExplain, actionAI] = await Promise.all([
-        apiPost<AIResult>("/ai/summarize", { type: "market", data: r }),
+      const aiPromises = Promise.all([
+        apiPost<AIResult>("/ai/summarize", { type: "market", data: r }).then((ai) => {
+          setAiResult(ai?.result ?? null);
+          _cache.aiResult = ai?.result ?? null;
+        }),
         apiPost<RegimeProbsAI>("/ai/summarize", {
           type: "regime_probs",
           data: {
@@ -222,37 +266,33 @@ export default function MarketOverviewPage() {
             adx: r.adx,
             breadth_pct: r.breadth_pct,
           },
+        }).then((regimeProbs) => {
+          setRegimeAI(regimeProbs?.result ?? null);
+          _cache.regimeAI = regimeProbs?.result ?? null;
         }),
         apiPost<AllocationAI>("/ai/summarize", {
           type: "allocation_explain",
           data: r,
+        }).then((allocExplain) => {
+          if (allocExplain?.result?.strategies) {
+            const map: Record<string, { name: string; explanation: string }> = {};
+            for (const s of allocExplain.result.strategies) {
+              map[s.key] = { name: s.name, explanation: s.explanation };
+            }
+            setAllocAI(map);
+            _cache.allocAI = map;
+          }
         }),
         apiPost<MarketActionAI>("/ai/summarize", {
           type: "market_action",
           data: r,
+        }).then((actionAI) => {
+          setActionBanner(actionAI?.result ?? null);
+          _cache.actionBanner = actionAI?.result ?? null;
         }),
       ]);
-      setAiResult(ai?.result ?? null);
-      setRegimeAI(regimeProbs?.result ?? null);
-      setActionBanner(actionAI?.result ?? null);
-      _cache.aiResult = ai?.result ?? null;
-      _cache.regimeAI = regimeProbs?.result ?? null;
-      _cache.actionBanner = actionAI?.result ?? null;
-
-      if (allocExplain?.result?.strategies) {
-        const map: Record<string, { name: string; explanation: string }> = {};
-        for (const s of allocExplain.result.strategies) {
-          map[s.key] = { name: s.name, explanation: s.explanation };
-        }
-        setAllocAI(map);
-        _cache.allocAI = map;
-      }
+      aiPromises.catch(() => {});
     }
-
-    const ts = new Date().toISOString();
-    _cache.fetchedAt = ts;
-    setDashboardFetchedAt(ts);
-    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -266,22 +306,18 @@ export default function MarketOverviewPage() {
     recsScan.start("/sectors/start-recs", forceRefresh ? { refresh: 1 } : {});
   }, [recsScan]);
 
+  // ---- Loading state ----
   if (loading) {
     return (
       <>
-        <PageHeader
-          title="Market Overview"
-          subtitle="Regime detection, strategy allocation & sector recommendations"
-        />
-        <div className="grid grid-cols-4 gap-4 mb-8">
+        <div className="mb-8">
+          <div className="h-10 w-64 rounded-xl bg-muted/50 animate-pulse mb-2" />
+          <div className="h-5 w-48 rounded-lg bg-muted/30 animate-pulse" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">
           {[1, 2, 3, 4].map((i) => (
-            <div
-              key={i}
-              className="bg-card border border-border rounded-2xl px-5 py-4 animate-qp-pulse"
-              style={{ boxShadow: "var(--shadow-card)" }}
-            >
-              <div className="h-3 bg-border rounded w-16 mb-3" />
-              <div className="h-7 bg-border rounded w-24" />
+            <div key={i} className="rounded-2xl p-[2px] gradient-border opacity-30">
+              <div className="rounded-[14px] bg-background p-6 h-28 animate-pulse" />
             </div>
           ))}
         </div>
@@ -289,28 +325,31 @@ export default function MarketOverviewPage() {
     );
   }
 
+  // ---- Offline state ----
   if (!regime) {
     return (
       <>
-        <PageHeader title="Market Overview" />
-        <div
-          className="bg-card border border-border rounded-2xl px-8 py-10 text-center"
-          style={{ boxShadow: "var(--shadow-card)" }}
-        >
-          <div className="text-qp-amber text-lg font-semibold mb-2">
-            Backend Offline
-          </div>
-          <p className="text-text-secondary text-sm">
-            Start the API with{" "}
-            <code className="font-mono bg-card-alt px-2 py-0.5 rounded-md border border-border text-text-body">
-              uvicorn backend.main:app
-            </code>
-          </p>
+        <div className="mb-8">
+          <h1 className="text-3xl font-black text-foreground tracking-tight">Market Overview</h1>
         </div>
+        <GradientCard>
+          <div className="text-center py-6">
+            <div className="text-amber-400 text-lg font-semibold mb-2">
+              Backend Offline
+            </div>
+            <p className="text-foreground/80 text-sm">
+              Start the API with{" "}
+              <code className="font-mono bg-muted px-2 py-0.5 rounded-md text-foreground/80">
+                uvicorn backend.main:app
+              </code>
+            </p>
+          </div>
+        </GradientCard>
       </>
     );
   }
 
+  // ---- Data extraction ----
   const regimeName = regime.regime
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -330,28 +369,89 @@ export default function MarketOverviewPage() {
     ? Object.entries(probs).sort(([, a], [, b]) => b - a)[0]
     : null;
 
+  // ---- Metric configs ----
+  const regimeColor =
+    regime.regime.includes("bull") ? "#10b981"
+    : regime.regime.includes("crisis") ? "#f43f5e"
+    : regime.regime.includes("bear") ? "#f59e0b"
+    : "#8b5cf6";
+
+  const heroMetrics = [
+    {
+      label: "Regime",
+      value: regimeName,
+      valueColor: regimeColor,
+      delta: `${Math.round(confidence * 100)}% confidence`,
+      deltaColor: (confidence >= 0.6 ? "green" : "neutral") as "green" | "red" | "neutral",
+      tooltip: <MetricTooltip content={METRIC_TOOLTIPS.regime} />,
+    },
+    {
+      label: "VIX (Fear Index)",
+      value: vix.toFixed(1),
+      valueColor: vix >= 30 ? "#f43f5e" : vix >= 20 ? "#f59e0b" : "#10b981",
+      delta:
+        vix >= 30 ? "High fear — market is panicking"
+        : vix >= 20 ? "Elevated — investors are nervous"
+        : vix >= 15 ? "Normal — calm market"
+        : "Very low — market is complacent",
+      deltaColor: (vix >= 25 ? "red" : vix >= 20 ? "neutral" : "green") as "green" | "red" | "neutral",
+      tooltip: <MetricTooltip content={METRIC_TOOLTIPS.vix} />,
+    },
+    {
+      label: "Breadth",
+      value: `${breadth.toFixed(1)}%`,
+      valueColor: breadth >= 60 ? "#10b981" : breadth >= 40 ? "#f59e0b" : "#f43f5e",
+      delta:
+        breadth >= 70 ? "Strong — most stocks are healthy"
+        : breadth >= 50 ? "Mixed — half the market is weak"
+        : breadth >= 30 ? "Weak — majority of stocks falling"
+        : "Very weak — broad selloff",
+      deltaColor: (breadth >= 60 ? "green" : breadth >= 40 ? "neutral" : "red") as "green" | "red" | "neutral",
+      tooltip: <MetricTooltip content={METRIC_TOOLTIPS.breadth} />,
+    },
+    {
+      label: "ADX (Trend Strength)",
+      value: adx.toFixed(1),
+      valueColor: adx >= 25 ? "#3b82f6" : "#64748b",
+      delta:
+        adx >= 40 ? "Very strong trend"
+        : adx >= 25 ? "Clear trend in place"
+        : "No clear direction — choppy",
+      deltaColor: (adx >= 25 ? "green" : "neutral") as "green" | "red" | "neutral",
+      tooltip: <MetricTooltip content={METRIC_TOOLTIPS.adx} />,
+    },
+  ];
+
   return (
     <>
-      <PageHeader
-        title="Market Overview"
-        subtitle="Your daily market briefing"
-        description="This page shows you what the market is doing right now — is it going up, down, or sideways? Based on that, it tells you which strategies work best today and picks the top stocks to look at. Click 'Load Stock Picks' to get specific buy recommendations with entry prices and targets."
-        actions={
-          <div className="flex items-center gap-2">
-            {dashboardFetchedAt && !loading && (
-              <CacheAge timestamp={dashboardFetchedAt} />
-            )}
-            <button
-              onClick={fetchDashboard}
-              disabled={loading}
-              className="flex items-center gap-2 px-4 py-2.5 border border-border rounded-xl text-sm font-medium text-text-body hover:bg-card-alt transition-colors active:scale-[0.98] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {loading && <PulseInline />}
-              {loading ? "Refreshing..." : "Refresh"}
-            </button>
-          </div>
-        }
-      />
+      {/* Hero Header */}
+      <motion.div
+        className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+      >
+        <div>
+          <h1 className="text-2xl font-black tracking-tight">
+            <span className="bg-gradient-to-r from-[#00ccb1] via-[#7b61ff] to-[#1ca0fb] bg-clip-text text-transparent">
+              Market Overview
+            </span>
+          </h1>
+          <p className="text-foreground/80 text-[14px] mt-0.5">Your daily market briefing</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {dashboardFetchedAt && !loading && (
+            <CacheAge timestamp={dashboardFetchedAt} />
+          )}
+          <GradientButton
+            onClick={fetchDashboard}
+            disabled={loading}
+          >
+            {loading && <PulseInline />}
+            {loading ? "Refreshing..." : "Refresh"}
+          </GradientButton>
+        </div>
+      </motion.div>
 
       {/* Market Action Banner */}
       {actionBanner && (
@@ -362,64 +462,16 @@ export default function MarketOverviewPage() {
         />
       )}
 
-      {/* Top Metrics */}
-      <div className="grid grid-cols-4 gap-4 mb-8">
-        <MetricCard
-          label="Regime"
-          value={regimeName}
-          valueColor={
-            regime.regime.includes("bull") ? "#2d9d3a"
-            : regime.regime.includes("crisis") ? "#d44040"
-            : regime.regime.includes("bear") ? "#c68a1a"
-            : "#6c5ce7"
-          }
-          delta={`${Math.round(confidence * 100)}% confidence`}
-          deltaColor={confidence >= 0.6 ? "green" : "neutral"}
-        />
-        <MetricCard
-          label="VIX (Fear Index)"
-          value={vix.toFixed(1)}
-          valueColor={vix >= 30 ? "#d44040" : vix >= 20 ? "#c68a1a" : "#2d9d3a"}
-          delta={
-            vix >= 30 ? "High fear — market is panicking"
-            : vix >= 20 ? "Elevated — investors are nervous"
-            : vix >= 15 ? "Normal — calm market"
-            : "Very low — market is complacent"
-          }
-          deltaColor={vix >= 25 ? "red" : vix >= 20 ? "neutral" : "green"}
-        />
-        <MetricCard
-          label="Breadth"
-          value={`${breadth.toFixed(1)}%`}
-          valueColor={breadth >= 60 ? "#2d9d3a" : breadth >= 40 ? "#c68a1a" : "#d44040"}
-          delta={
-            breadth >= 70 ? "Strong — most stocks are healthy"
-            : breadth >= 50 ? "Mixed — half the market is weak"
-            : breadth >= 30 ? "Weak — majority of stocks falling"
-            : "Very weak — broad selloff"
-          }
-          deltaColor={breadth >= 60 ? "green" : breadth >= 40 ? "neutral" : "red"}
-        />
-        <MetricCard
-          label="ADX (Trend Strength)"
-          value={adx.toFixed(1)}
-          valueColor={adx >= 25 ? "#3b7dd8" : "#a6a6a0"}
-          delta={
-            adx >= 40 ? "Very strong trend"
-            : adx >= 25 ? "Clear trend in place"
-            : "No clear direction — choppy"
-          }
-          deltaColor={adx >= 25 ? "green" : "neutral"}
-        />
-      </div>
+      {/* Hero Metrics — animated gradient borders */}
+      <HeroMetrics metrics={heroMetrics} />
 
       {/* AI Briefing */}
       {aiResult?.market_summary && (
-        <AICard title="Market Briefing" accentColor="#539616">
+        <AICard title="Market Briefing" accentColor="#00ccb1">
           <p>{aiResult.market_summary}</p>
           {aiResult.strategy_advice && (
-            <div className="mt-3 px-4 py-3 bg-accent-bg rounded-xl text-[13px] text-text-body">
-              <span className="font-semibold text-accent">Strategy:</span>{" "}
+            <div className="mt-3 px-4 py-3 bg-emerald-500/5 rounded-xl text-[13px] text-foreground/80 border border-emerald-500/10">
+              <span className="font-semibold text-emerald-400">Strategy:</span>{" "}
               {aiResult.strategy_advice}
             </div>
           )}
@@ -427,266 +479,307 @@ export default function MarketOverviewPage() {
       )}
 
       {/* Collapsible Details */}
-      <button
-        onClick={() => setDetailsOpen(!detailsOpen)}
-        className="mt-6 w-full flex items-center justify-between px-5 py-3 bg-card border border-border rounded-xl hover:bg-card-alt transition-colors active:scale-[0.99] cursor-pointer"
-        style={{ boxShadow: "var(--shadow-card)" }}
+      <motion.div
+        className="relative mt-6 rounded-[1.25rem] border-[0.75px] border-border p-2 md:p-3 md:rounded-[1.5rem]"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.3 }}
       >
-        <span className="text-[14px] font-semibold text-text-primary">
-          Regime Probabilities & Recommended Allocation
-        </span>
-        <ChevronDown
-          className={`h-4 w-4 text-text-muted transition-transform duration-200 ${detailsOpen ? "rotate-180" : ""}`}
+        <GlowingEffect
+          spread={40}
+          glow
+          disabled={false}
+          proximity={64}
+          inactiveZone={0.01}
+          borderWidth={2}
         />
-      </button>
-
-      {detailsOpen && (
-      <div className="grid grid-cols-2 gap-6 mt-3">
-        {/* Regime Probabilities */}
-        {probs && Object.keys(probs).length > 0 && (
-          <div
-            className="bg-card border border-border rounded-2xl px-6 py-5"
-            style={{ boxShadow: "var(--shadow-card)" }}
-          >
-            <h3 className="text-[15px] font-semibold text-text-primary mb-4">
-              Regime Probabilities
-            </h3>
-            <div className="space-y-3">
-              {Object.entries(probs)
-                .sort(([, a], [, b]) => b - a)
-                .map(([key, prob]) => {
-                  const label = key
-                    .replace(/_/g, " ")
-                    .replace(/\b\w/g, (c) => c.toUpperCase());
-                  const barColor =
-                    prob >= 0.35
-                      ? "#d44040"
-                      : prob >= 0.2
-                        ? "#c6a339"
-                        : "#539616";
-                  return (
-                    <div key={key}>
-                      <div className="flex justify-between text-[13px] mb-1">
-                        <span className="text-text-body font-medium">
-                          {label}
-                        </span>
-                        <span className="font-mono font-bold text-text-primary">
-                          {Math.round(prob * 100)}%
-                        </span>
-                      </div>
-                      <div className="h-2 bg-card-alt rounded-full border border-border overflow-hidden">
-                        <div
-                          className="h-full rounded-full transition-all duration-500"
-                          style={{
-                            width: `${prob * 100}%`,
-                            background: barColor,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-
-            {/* AI Regime Analysis */}
-            {regimeAI?.action ? (
-              <div className="mt-5 pt-4 border-t border-border space-y-2">
-                <div className="text-[14px] font-semibold text-text-primary">
-                  {regimeAI.action}
-                </div>
-                {regimeAI.timing && (
-                  <div className="px-3 py-2.5 bg-accent-bg rounded-xl text-[13px] text-text-body">
-                    <span className="font-semibold text-accent">
-                      When to buy:
-                    </span>{" "}
-                    {regimeAI.timing}
-                  </div>
-                )}
-                {regimeAI.news_sentiment && (
-                  <div
-                    className="px-3 py-2.5 bg-qp-amber-bg rounded-xl text-[13px] text-text-body"
-                    style={{ borderLeft: "3px solid #c6a339" }}
-                  >
-                    <span className="font-semibold text-qp-amber">
-                      Market Mood:
-                    </span>{" "}
-                    {regimeAI.news_sentiment}
-                  </div>
-                )}
-              </div>
-            ) : topProb ? (
-              <div className="mt-4 pt-3 border-t border-border">
-                <div className="text-[13px] text-text-secondary">
-                  Top scenario:{" "}
-                  <span className="font-medium text-text-primary">
-                    {topProb[0]
-                      .replace(/_/g, " ")
-                      .replace(/\b\w/g, (c) => c.toUpperCase())}
-                  </span>{" "}
-                  ({Math.round(topProb[1] * 100)}%).{" "}
-                  {topProb[1] >= 0.5
-                    ? "System is confident."
-                    : "System is unsure — keeping extra cash."}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        )}
-
-        {/* Strategy Allocation */}
-        {weights && Object.keys(weights).length > 0 && (
-          <div
-            className="bg-card border border-border rounded-2xl px-6 py-5"
-            style={{ boxShadow: "var(--shadow-card)" }}
-          >
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="text-[15px] font-semibold text-text-primary">
-                Recommended Allocation
-              </h3>
-              <div className="flex items-baseline gap-2">
-                <span className="font-mono text-2xl font-bold text-accent">
-                  {Math.round(invested * 100)}%
-                </span>
-                <span className="text-[12px] text-text-muted">in market</span>
-              </div>
-            </div>
-            <p className="text-[12px] text-text-muted mb-4">
-              Based on today&apos;s market conditions, here&apos;s how you should split your money if investing right now.
-            </p>
-            <div>
-              {Object.entries(weights)
-                .sort(([, a], [, b]) => b - a)
-                .filter(([, v]) => v >= 0.01)
-                .map(([key, pct]) => {
-                  const ai = allocAI[key];
-                  const [fallbackName, fallbackDesc] = STRAT_META[key] ?? [
-                    key
-                      .replace(/_/g, " ")
-                      .replace(/\b\w/g, (c) => c.toUpperCase()),
-                    "",
-                  ];
-                  const activity = regime?.strategy_activity;
-                  const signalStrats = WEIGHT_KEY_TO_SIGNAL_STRATS[key];
-                  let signalCount: number | undefined;
-                  let isActive: boolean | undefined;
-                  if (activity && signalStrats) {
-                    signalCount = 0;
-                    for (const sk of signalStrats) {
-                      signalCount += activity[sk]?.signal_count ?? 0;
-                    }
-                    isActive = signalCount > 0;
-                  }
-                  const healthKey = WEIGHT_KEY_TO_HEALTH_KEY[key];
-                  const health = healthKey ? regime?.strategy_health?.[healthKey] : undefined;
-
-                  return (
-                    <AllocationBar
-                      key={key}
-                      label={ai?.name ?? fallbackName}
-                      description={ai?.explanation ?? fallbackDesc}
-                      pct={pct}
-                      color={STRAT_COLORS[key] ?? "#a6a6a0"}
-                      signalCount={signalCount}
-                      isActive={isActive}
-                      healthStatus={health?.status}
-                    />
-                  );
-                })}
-            </div>
-            <div className="mt-3 pt-3 border-t border-border text-[13px] text-text-body leading-relaxed">
-              {invested >= 0.8 ? (
-                <p>
-                  <strong className="text-qp-green">Go all in.</strong> Market conditions look
-                  favorable — if you&apos;re investing, put {Math.round(invested * 100)}% to work
-                  and keep just {Math.round((1 - invested) * 100)}% as a safety buffer.
-                </p>
-              ) : invested >= 0.5 ? (
-                <p>
-                  <strong className="text-accent">Be cautious.</strong> The recommendation is to
-                  invest {Math.round(invested * 100)}% of your capital and keep{" "}
-                  {Math.round((1 - invested) * 100)}% in cash.
-                  {regime.regime.includes("bear")
-                    ? " The market is in a downtrend right now, so having cash on hand lets you buy cheaper later if stocks keep falling."
-                    : " The market is uncertain, so keeping some cash gives you flexibility to jump on better opportunities."}
-                </p>
-              ) : invested >= 0.2 ? (
-                <p>
-                  <strong className="text-qp-amber">Stay mostly in cash.</strong> The recommendation
-                  is to only invest {Math.round(invested * 100)}% and hold{" "}
-                  {Math.round((1 - invested) * 100)}% in cash. The market looks risky — it&apos;s
-                  better to protect your money now and invest more when conditions improve.
-                </p>
-              ) : (
-                <p>
-                  <strong className="text-qp-red">Wait it out.</strong> The market looks too
-                  risky to invest right now. Keep most of your money in cash and wait for
-                  things to stabilize.
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-      )}
-
-      {/* Stock Picks Header */}
-      <div className="mt-8 flex items-center justify-between mb-4">
-        <h3 className="text-[18px] font-bold text-text-primary">
-          Stock Picks
-        </h3>
-        <div className="flex items-center gap-2">
-          {recsScan.resultTimestamp && !recsLoading && (
-            <CacheAge timestamp={recsScan.resultTimestamp} />
-          )}
-          <button
-            onClick={() => loadRecs(false)}
-            disabled={recsLoading}
-            className="flex items-center gap-2 px-5 py-2.5 bg-accent text-white rounded-xl text-sm font-semibold hover:bg-accent-light transition-colors active:scale-[0.98] cursor-pointer shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {recsLoading && <PulseInline />}
-            {recsLoading ? "Analyzing..." : recs ? "Reload Picks" : "Load Stock Picks"}
-          </button>
-          {recs && !recsLoading && (
-            <button
-              onClick={() => loadRecs(true)}
-              className="px-4 py-2.5 border border-border rounded-xl text-sm font-medium text-text-body hover:bg-card-alt transition-colors active:scale-[0.98] cursor-pointer"
-            >
-              Force Refresh
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Stock Picks Loading / Error States */}
-      {recsLoading && (
-        <div
-          className="mt-8 bg-card border border-border rounded-2xl px-8 py-10 text-center"
-          style={{ boxShadow: "var(--shadow-card)" }}
+        <button
+          onClick={() => setDetailsOpen(!detailsOpen)}
+          className="relative flex items-center justify-between w-full rounded-xl border-[0.75px] border-border bg-background px-5 py-3 cursor-pointer active:scale-[0.99] shadow-sm dark:shadow-[0px_0px_27px_0px_rgba(45,45,45,0.3)]"
         >
-          <PulseLoader
-            size="lg"
-            label={`Analyzing sectors... ${recsScan.total > 0 ? Math.round((recsScan.progress / recsScan.total) * 100) : 0}%`}
-            progress={recsScan.total > 0 ? Math.round((recsScan.progress / recsScan.total) * 100) : undefined}
-            sublabel={recsScan.step || "Scanning every S&P 500 sector and evaluating top stocks."}
-          />
+          <span className="text-[14px] font-semibold text-foreground">
+            Regime Probabilities & Recommended Allocation
+          </span>
+          <motion.div
+            animate={{ rotate: detailsOpen ? 180 : 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <ChevronDown className="h-4 w-4 text-foreground/80" />
+          </motion.div>
+        </button>
+      </motion.div>
+
+      <AnimatePresence>
+        {detailsOpen && (
+          <motion.div
+            className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+          >
+            {/* Regime Probabilities */}
+            {probs && Object.keys(probs).length > 0 && (
+              <GradientCard animate={false}>
+                <h3 className="text-[15px] font-semibold text-foreground mb-3">
+                  Regime Probabilities
+                </h3>
+                <div className="space-y-2.5">
+                  {Object.entries(probs)
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([key, prob], i) => {
+                      const label = key
+                        .replace(/_/g, " ")
+                        .replace(/\b\w/g, (c) => c.toUpperCase());
+                      const barColor =
+                        prob >= 0.35 ? "#fb7185"
+                        : prob >= 0.2 ? "#fbbf24"
+                        : "#34d399";
+                      return (
+                        <div key={key}>
+                          <div className="flex justify-between text-[13px] mb-1">
+                            <span className="text-foreground/80 font-medium">{label}</span>
+                            <span className="font-bold text-foreground">
+                              <AnimatedNumber
+                                value={Math.round(prob * 100)}
+                                format={(n) => `${Math.round(n)}%`}
+                              />
+                            </span>
+                          </div>
+                          <div className="h-2 bg-muted/50 rounded-full overflow-hidden">
+                            <motion.div
+                              className="h-full rounded-full"
+                              style={{ background: barColor }}
+                              initial={{ width: 0 }}
+                              animate={{ width: `${prob * 100}%` }}
+                              transition={{ duration: 0.7, delay: 0.15 + i * 0.06, ease: [0.25, 0.46, 0.45, 0.94] }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+
+                {regimeAI?.action ? (
+                  <div className="mt-3 pt-3 border-t border-border space-y-2">
+                    <div className="text-[13px] font-semibold text-foreground leading-relaxed">{regimeAI.action}</div>
+                    {regimeAI.timing && (
+                      <div className="px-3 py-2 bg-emerald-500/5 rounded-lg text-[13px] text-foreground/80 leading-relaxed border border-emerald-500/10">
+                        <span className="font-semibold text-emerald-400">When to buy:</span>{" "}
+                        {regimeAI.timing}
+                      </div>
+                    )}
+                    {regimeAI.news_sentiment && (
+                      <div className="px-3 py-2 bg-amber-500/5 rounded-lg text-[13px] text-foreground/80 leading-relaxed border-l-2 border-amber-500/40">
+                        <span className="font-semibold text-amber-400">Market Mood:</span>{" "}
+                        {regimeAI.news_sentiment}
+                      </div>
+                    )}
+                  </div>
+                ) : topProb ? (
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <div className="text-[13px] text-foreground/80 leading-relaxed">
+                      Top scenario:{" "}
+                      <span className="font-medium text-foreground">
+                        {topProb[0].replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                      </span>{" "}
+                      ({Math.round(topProb[1] * 100)}%).{" "}
+                      {topProb[1] >= 0.5 ? "System is confident." : "System is unsure — keeping extra cash."}
+                    </div>
+                  </div>
+                ) : null}
+              </GradientCard>
+            )}
+
+            {/* Strategy Allocation */}
+            {weights && Object.keys(weights).length > 0 && (
+              <GradientCard animate={false}>
+                <h3 className="text-[15px] font-semibold text-foreground mb-1">
+                  Recommended Allocation
+                </h3>
+                <p className="text-[12px] text-foreground/80 mb-3">
+                  Based on today&apos;s market conditions, here&apos;s how you should split your money if investing right now.
+                </p>
+
+                <AllocationDonut
+                  slices={Object.entries(weights)
+                    .sort(([, a], [, b]) => b - a)
+                    .filter(([, v]) => v >= 0.01)
+                    .map(([key, pct]) => {
+                      const [fallbackName] = STRAT_META[key] ?? [
+                        key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+                      ];
+                      return {
+                        key,
+                        label: allocAI[key]?.name ?? fallbackName,
+                        value: pct,
+                        color: STRAT_COLORS[key] ?? "#64748b",
+                      };
+                    })}
+                  investedPct={invested}
+                  className="mb-4"
+                />
+
+                <div>
+                  {Object.entries(weights)
+                    .sort(([, a], [, b]) => b - a)
+                    .filter(([, v]) => v >= 0.01)
+                    .map(([key, pct], i) => {
+                      const ai = allocAI[key];
+                      const [fallbackName, fallbackDesc] = STRAT_META[key] ?? [
+                        key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+                        "",
+                      ];
+                      const activity = regime?.strategy_activity;
+                      const signalStrats = WEIGHT_KEY_TO_SIGNAL_STRATS[key];
+                      let signalCount: number | undefined;
+                      let isActive: boolean | undefined;
+                      if (activity && signalStrats) {
+                        signalCount = 0;
+                        for (const sk of signalStrats) {
+                          signalCount += activity[sk]?.signal_count ?? 0;
+                        }
+                        isActive = signalCount > 0;
+                      }
+                      const healthKey = WEIGHT_KEY_TO_HEALTH_KEY[key];
+                      const health = healthKey ? regime?.strategy_health?.[healthKey] : undefined;
+
+                      return (
+                        <AllocationBar
+                          key={key}
+                          label={ai?.name ?? fallbackName}
+                          description={ai?.explanation ?? fallbackDesc}
+                          pct={pct}
+                          color={STRAT_COLORS[key] ?? "#64748b"}
+                          signalCount={signalCount}
+                          isActive={isActive}
+                          healthStatus={health?.status}
+                          index={i}
+                        />
+                      );
+                    })}
+                </div>
+                <div className="mt-3 pt-3 border-t border-border text-[13px] text-foreground/80 leading-relaxed">
+                  {invested >= 0.8 ? (
+                    <p>
+                      <strong className="text-emerald-400">Go all in.</strong> Market conditions look
+                      favorable — put {Math.round(invested * 100)}% to work
+                      and keep just {Math.round((1 - invested) * 100)}% as a safety buffer.
+                    </p>
+                  ) : invested >= 0.5 ? (
+                    <p>
+                      <strong className="text-cyan-400">Be cautious.</strong> Invest{" "}
+                      {Math.round(invested * 100)}% of your capital, keep{" "}
+                      {Math.round((1 - invested) * 100)}% in cash.
+                      {regime.regime.includes("bear")
+                        ? " Downtrend — cash lets you buy cheaper later."
+                        : " Uncertain — keep flexibility for better opportunities."}
+                    </p>
+                  ) : invested >= 0.2 ? (
+                    <p>
+                      <strong className="text-amber-400">Stay mostly in cash.</strong> Only invest{" "}
+                      {Math.round(invested * 100)}%, hold {Math.round((1 - invested) * 100)}% in cash.
+                      The market looks risky.
+                    </p>
+                  ) : (
+                    <p>
+                      <strong className="text-rose-400">Wait it out.</strong> Too risky right now.
+                      Keep most of your money in cash.
+                    </p>
+                  )}
+                </div>
+              </GradientCard>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Stock Picks Toggle */}
+      <motion.div
+        className="relative mt-8 rounded-[1.25rem] border-[0.75px] border-border p-2 md:p-3 mb-5 md:rounded-[1.5rem]"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.2 }}
+      >
+        <GlowingEffect
+          spread={40}
+          glow
+          disabled={false}
+          proximity={64}
+          inactiveZone={0.01}
+          borderWidth={2}
+        />
+        <div className="relative flex items-center w-full rounded-xl border-[0.75px] border-border bg-background px-5 py-3 shadow-sm dark:shadow-[0px_0px_27px_0px_rgba(45,45,45,0.3)]">
+          <span className="text-[14px] font-semibold text-foreground">Stock Picks</span>
+          <div className="flex items-center gap-2 ml-auto mr-3">
+            {recsScan.resultTimestamp && !recsLoading && (
+              <CacheAge timestamp={recsScan.resultTimestamp} />
+            )}
+            <GradientButton
+              onClick={() => loadRecs(false)}
+              disabled={recsLoading}
+            >
+              {recsLoading && <PulseInline />}
+              {recsLoading ? "Analyzing..." : recs ? "Reload Picks" : "Load Stock Picks"}
+            </GradientButton>
+            {recs && !recsLoading && (
+              <GradientButton onClick={() => loadRecs(true)}>
+                Force Refresh
+              </GradientButton>
+            )}
+          </div>
+          <button
+            onClick={() => setPicksOpen(!picksOpen)}
+            className="cursor-pointer"
+          >
+            <motion.div
+              animate={{ rotate: picksOpen ? 180 : 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              <ChevronDown className="h-4 w-4 text-foreground/80" />
+            </motion.div>
+          </button>
         </div>
+      </motion.div>
+
+      <AnimatePresence>
+        {picksOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+          >
+
+      {/* Stock Picks Loading / Error */}
+      {recsLoading && (
+        <GradientCard animate={false}>
+          <div className="py-6">
+            <PulseLoader
+              size="lg"
+              label={`Analyzing sectors... ${recsScan.total > 0 ? Math.round((recsScan.progress / recsScan.total) * 100) : 0}%`}
+              progress={recsScan.total > 0 ? Math.round((recsScan.progress / recsScan.total) * 100) : undefined}
+              sublabel={recsScan.step || "Scanning every S&P 500 sector and evaluating top stocks."}
+            />
+          </div>
+        </GradientCard>
       )}
 
       {recsError && !recsLoading && (
-        <div
-          className="mt-8 bg-qp-red-bg border border-qp-red/15 rounded-2xl px-8 py-6 text-center"
-        >
-          <div className="text-[15px] font-semibold text-qp-red mb-1">
-            Could not load stock picks
+        <GradientCard animate={false}>
+          <div className="text-center py-4">
+            <div className="text-[15px] font-semibold text-rose-400 mb-1">
+              Could not load stock picks
+            </div>
+            <p className="text-[13px] text-foreground/80">{recsError}</p>
+            <button
+              onClick={() => loadRecs(false)}
+              className="mt-3 px-4 py-2 border border-border rounded-xl text-sm font-medium text-foreground/80 hover:text-foreground transition-all active:scale-[0.98] cursor-pointer"
+            >
+              Try Again
+            </button>
           </div>
-          <p className="text-[13px] text-text-muted">{recsError}</p>
-          <button
-            onClick={() => loadRecs(false)}
-            className="mt-3 px-4 py-2 bg-card border border-border rounded-xl text-sm font-medium text-text-primary hover:bg-card-alt transition-colors active:scale-[0.98] cursor-pointer"
-          >
-            Try Again
-          </button>
-        </div>
+        </GradientCard>
       )}
 
       {/* Stock Picks */}
@@ -714,26 +807,17 @@ export default function MarketOverviewPage() {
                 name={p.name}
                 rank={i + 1}
                 price={p.price}
+                index={i}
                 badges={[
                   { text: p.sector, variant: "blue" },
                   { text: `Score ${p.score}`, variant: scoreVariant },
                 ]}
                 stats={[
                   { label: "Entry", value: formatDollar(entry) },
-                  {
-                    label: "Stop Loss",
-                    value: stop ? formatDollar(stop) : "—",
-                    color: "#d44040",
-                  },
-                  {
-                    label: "Target",
-                    value: formatDollar(target),
-                    color: "#2d9d3a",
-                  },
+                  { label: "Stop Loss", value: stop ? formatDollar(stop) : "—", color: "#f43f5e" },
+                  { label: "Target", value: formatDollar(target), color: "#10b981" },
                   ...(rr ? [{ label: "R/R", value: `${rr}:1` }] : []),
-                  ...(p.rsi
-                    ? [{ label: "RSI", value: p.rsi.toFixed(0) }]
-                    : []),
+                  ...(p.rsi ? [{ label: "RSI", value: p.rsi.toFixed(0) }] : []),
                 ]}
                 entrySignal={signal}
                 meta={p.why}
@@ -745,64 +829,20 @@ export default function MarketOverviewPage() {
 
       {/* Sector Breakdown */}
       {recs?.sectors && recs.sectors.length > 0 && !recsLoading && (
-        <div className="mt-8">
-          <h3 className="text-[18px] font-bold text-text-primary mb-4">
-            Sector Breakdown
-          </h3>
-          <div className="grid grid-cols-1 gap-2">
-            {recs.sectors.map((s) => {
-              const verdictVariant: BadgeVariant =
-                s.verdict === "BUY"
-                  ? "green"
-                  : s.verdict === "HOLD"
-                    ? "amber"
-                    : "red";
-              return (
-                <div
-                  key={s.sector}
-                  className="bg-card border border-border rounded-xl px-5 py-3 flex justify-between items-center"
-                  style={{ boxShadow: "var(--shadow-card)" }}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-[14px] font-semibold text-text-primary">
-                      {s.sector}
-                    </span>
-                    <span className="text-[12px] text-text-muted font-mono">
-                      {s.etf}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span
-                      className="font-mono text-[13px] font-medium"
-                      style={{
-                        color: s.return_5d >= 0 ? "#2d9d3a" : "#d44040",
-                      }}
-                    >
-                      5d: {s.return_5d >= 0 ? "+" : ""}
-                      {s.return_5d.toFixed(1)}%
-                    </span>
-                    <span
-                      className="font-mono text-[13px] font-medium"
-                      style={{
-                        color: s.return_20d >= 0 ? "#2d9d3a" : "#d44040",
-                      }}
-                    >
-                      20d: {s.return_20d >= 0 ? "+" : ""}
-                      {s.return_20d.toFixed(1)}%
-                    </span>
-                    <span className="font-mono text-[12px] text-text-muted">
-                      RSI {s.rsi.toFixed(0)}
-                    </span>
-                    <Badge variant={verdictVariant}>
-                      {s.verdict} {s.score}
-                    </Badge>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <motion.div
+          className="mt-8"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          <h3 className="text-xl font-bold text-foreground mb-4">Sector Breakdown</h3>
+          <SectorTable sectors={recs.sectors} />
+        </motion.div>
       )}
+
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }

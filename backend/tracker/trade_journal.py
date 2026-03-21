@@ -8,13 +8,36 @@ Handles the human-in-the-loop workflow:
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date
 
 from backend.data.fetcher import DataFetcher
-from backend.models.database import get_supabase
+from backend.models.database import get_supabase, reset_client
 from backend.models.schemas import PhantomTrade, StrategyName, TradeEntry
 
 logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 2
+_RETRY_DELAY = 0.5
+
+
+def _with_retry(fn):
+    """Retry Supabase operations on transient connection/timeout errors."""
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            return fn()
+        except Exception as e:
+            err_msg = str(e).lower()
+            retriable = any(
+                k in err_msg
+                for k in ["timeout", "disconnected", "connection", "reset", "broken pipe", "57014"]
+            )
+            if retriable and attempt < _MAX_RETRIES:
+                reset_client()
+                time.sleep(_RETRY_DELAY * (attempt + 1))
+                logger.debug("Supabase retry %d after: %s", attempt + 1, e)
+                continue
+            raise
 
 
 class TradeJournal:
@@ -127,8 +150,9 @@ class TradeJournal:
 
     def get_active_trades(self) -> list[TradeEntry]:
         """All trades that have not been exited yet."""
-        sb = get_supabase()
-        result = sb.table("trades").select("*").is_("exit_date", "null").execute()
+        result = _with_retry(
+            lambda: get_supabase().table("trades").select("*").is_("exit_date", "null").execute()
+        )
         return [self._record_to_entry(r) for r in result.data]
 
     def get_closed_trades(
@@ -137,18 +161,22 @@ class TradeJournal:
         since: date | None = None,
     ) -> list[TradeEntry]:
         """Closed trades with optional strategy/date filters."""
-        sb = get_supabase()
-        q = sb.table("trades").select("*").not_.is_("exit_date", "null")
-        if strategy:
-            q = q.eq("strategy", strategy.value)
-        if since:
-            q = q.gte("exit_date", str(since))
-        result = q.order("exit_date", desc=True).execute()
+
+        def _query():
+            q = get_supabase().table("trades").select("*").not_.is_("exit_date", "null")
+            if strategy:
+                q = q.eq("strategy", strategy.value)
+            if since:
+                q = q.gte("exit_date", str(since))
+            return q.order("exit_date", desc=True).limit(500).execute()
+
+        result = _with_retry(_query)
         return [self._record_to_entry(r) for r in result.data]
 
     def get_trade(self, trade_id: int) -> TradeEntry | None:
-        sb = get_supabase()
-        result = sb.table("trades").select("*").eq("id", trade_id).execute()
+        result = _with_retry(
+            lambda: get_supabase().table("trades").select("*").eq("id", trade_id).execute()
+        )
         return self._record_to_entry(result.data[0]) if result.data else None
 
     def get_phantom_trades(
@@ -156,13 +184,15 @@ class TradeJournal:
         strategy: StrategyName | None = None,
         since: date | None = None,
     ) -> list[PhantomTrade]:
-        sb = get_supabase()
-        q = sb.table("phantom_trades").select("*")
-        if strategy:
-            q = q.eq("strategy", strategy.value)
-        if since:
-            q = q.gte("signal_date", str(since))
-        result = q.order("signal_date", desc=True).execute()
+        def _query():
+            q = get_supabase().table("phantom_trades").select("*")
+            if strategy:
+                q = q.eq("strategy", strategy.value)
+            if since:
+                q = q.gte("signal_date", str(since))
+            return q.order("signal_date", desc=True).execute()
+
+        result = _with_retry(_query)
         return [self._phantom_to_model(r) for r in result.data]
 
     # ── Monitoring ──────────────────────────────────────────────
@@ -275,7 +305,16 @@ class TradeJournal:
 
     def compute_summary(self, since: date | None = None) -> dict:
         """Aggregate P&L stats across all closed trades."""
-        trades = self.get_closed_trades(since=since)
+        try:
+            trades = self.get_closed_trades(since=since)
+        except Exception as e:
+            logger.warning("Failed to fetch closed trades for summary: %s", e)
+            return {"total_trades": 0}
+        return self.compute_summary_from_trades(trades)
+
+    @staticmethod
+    def compute_summary_from_trades(trades: list[TradeEntry]) -> dict:
+        """Aggregate P&L stats from a pre-fetched list of closed trades."""
         if not trades:
             return {"total_trades": 0}
 

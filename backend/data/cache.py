@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 2
 RETRY_DELAY = 0.5
 
+_mem: dict[str, tuple[datetime, object]] = {}
+_mem_lock = threading.Lock()
+
 
 def _with_retry(fn):
     """Retry Supabase operations on connection errors."""
@@ -40,9 +43,21 @@ def _with_retry(fn):
 
 
 class DataCache:
-    """Supabase-backed cache with TTL-based invalidation and retry logic."""
+    """Two-tier cache: fast in-memory dict + Supabase persistence.
+
+    Reads check memory first (instant), then Supabase.
+    Writes always update both memory and Supabase (async).
+    """
 
     def get(self, key: str) -> dict | pd.DataFrame | None:
+        with _mem_lock:
+            entry = _mem.get(key)
+            if entry:
+                expires, value = entry
+                if datetime.now(UTC) < expires:
+                    return value
+                del _mem[key]
+
         try:
             result = _with_retry(lambda: get_supabase().table("data_cache").select("*").eq("cache_key", key).execute())
         except Exception:
@@ -66,12 +81,20 @@ class DataCache:
 
         data = json.loads(record["data_json"])
         if isinstance(data, dict) and data.get("__type__") == "dataframe":
-            return pd.DataFrame.from_dict(data["data"])
-        return data
+            value = pd.DataFrame.from_dict(data["data"])
+        else:
+            value = data
+
+        with _mem_lock:
+            _mem[key] = (expires_at, value)
+        return value
 
     def set(self, key: str, value: dict | pd.DataFrame, ttl_hours: float = 1.0) -> None:
         now = datetime.now(UTC)
         expires = now + timedelta(hours=ttl_hours)
+
+        with _mem_lock:
+            _mem[key] = (expires, value)
 
         if isinstance(value, pd.DataFrame):
             df_reset = value.reset_index(drop=False)
@@ -95,24 +118,36 @@ class DataCache:
         threading.Thread(target=_write, daemon=True).start()
 
     def invalidate(self, key: str) -> None:
+        with _mem_lock:
+            _mem.pop(key, None)
         try:
             _with_retry(lambda: get_supabase().table("data_cache").delete().eq("cache_key", key).execute())
         except Exception:
             logger.debug("Cache invalidate failed for key %s", key)
 
     def clear_expired(self) -> int:
-        now = datetime.now(UTC).isoformat()
+        with _mem_lock:
+            now = datetime.now(UTC)
+            expired_keys = [k for k, (exp, _) in _mem.items() if now >= exp]
+            for k in expired_keys:
+                del _mem[k]
+
+        now_iso = now.isoformat()
         try:
             result = _with_retry(
-                lambda: get_supabase().table("data_cache").select("id").lt("expires_at", now).execute()
+                lambda: get_supabase().table("data_cache").select("id").lt("expires_at", now_iso).limit(200).execute()
             )
-            count = len(result.data) if result.data else 0
-            if count:
-                _with_retry(lambda: get_supabase().table("data_cache").delete().lt("expires_at", now).execute())
-                logger.info("Cleared %d expired cache entries", count)
-            return count
-        except Exception:
-            logger.exception("Failed to clear expired cache entries")
+            ids = [r["id"] for r in result.data] if result.data else []
+            if ids:
+                for i in range(0, len(ids), 50):
+                    batch = ids[i : i + 50]
+                    _with_retry(
+                        lambda b=batch: get_supabase().table("data_cache").delete().in_("id", b).execute()
+                    )
+                logger.info("Cleared %d expired cache entries", len(ids))
+            return len(ids)
+        except Exception as e:
+            logger.debug("Cache cleanup skipped (Supabase timeout): %s", type(e).__name__)
             return 0
 
 

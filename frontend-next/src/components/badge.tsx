@@ -2,12 +2,12 @@ import { cn } from "@/lib/utils";
 import type { BadgeVariant } from "@/lib/types";
 
 const VARIANT_STYLES: Record<BadgeVariant, string> = {
-  green: "bg-qp-green-bg text-qp-green border-qp-green/15",
-  red: "bg-qp-red-bg text-qp-red border-qp-red/15",
-  amber: "bg-qp-amber-bg text-qp-amber border-qp-amber/15",
-  blue: "bg-qp-blue-bg text-qp-blue border-qp-blue/15",
-  purple: "bg-qp-purple-bg text-qp-purple border-qp-purple/15",
-  gray: "bg-[rgba(107,107,99,0.06)] text-text-secondary border-border",
+  green: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+  red: "bg-rose-500/10 text-rose-400 border-rose-500/20",
+  amber: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+  blue: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+  purple: "bg-violet-500/10 text-violet-400 border-violet-500/20",
+  gray: "bg-slate-500/10 text-slate-400 border-slate-500/20",
 };
 
 interface BadgeProps {

@@ -8,17 +8,42 @@ eliminating on-demand latency for strategies and scanning.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 
 from backend.config import settings
 from backend.data.sources.yfinance_src import yfinance_source
-from backend.models.database import get_supabase
+from backend.models.database import get_supabase, reset_client
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 50
+_MAX_RETRIES = 2
+_RETRY_DELAY = 1.0
+
+
+def _upsert_with_retry(table: str, rows: list[dict], on_conflict: str) -> None:
+    """Upsert rows in small batches with retry on transient Supabase errors."""
+    for i in range(0, len(rows), BATCH_SIZE):
+        batch = rows[i : i + BATCH_SIZE]
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                get_supabase().table(table).upsert(batch, on_conflict=on_conflict).execute()
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                retriable = any(
+                    k in err_msg
+                    for k in ["timeout", "57014", "disconnected", "connection", "reset", "broken pipe"]
+                )
+                if retriable and attempt < _MAX_RETRIES:
+                    reset_client()
+                    time.sleep(_RETRY_DELAY * (attempt + 1))
+                    logger.debug("Supabase upsert retry %d for %s: %s", attempt + 1, table, e)
+                    continue
+                raise
 
 
 def _get_universe_tickers() -> list[str]:
@@ -50,7 +75,6 @@ def refresh_universe() -> None:
             logger.warning("DataRefresh: empty S&P 500 fetch, skipping universe update")
             return
 
-        sb = get_supabase()
         now = datetime.now(UTC).isoformat()
         rows = [
             {
@@ -63,9 +87,7 @@ def refresh_universe() -> None:
             for _, row in df.iterrows()
         ]
 
-        for i in range(0, len(rows), BATCH_SIZE):
-            batch = rows[i : i + BATCH_SIZE]
-            sb.table("universe").upsert(batch, on_conflict="ticker").execute()
+        _upsert_with_retry("universe", rows, on_conflict="ticker")
 
         logger.info("DataRefresh: universe updated — %d constituents", len(rows))
     except Exception:
@@ -89,7 +111,6 @@ def refresh_market_prices() -> None:
 
     try:
         all_data = yfinance_source.get_multiple_ohlcv(all_tickers, period="5d")
-        sb = get_supabase()
         now = datetime.now(UTC).isoformat()
         total = 0
 
@@ -113,7 +134,7 @@ def refresh_market_prices() -> None:
                     }
                 )
             if rows:
-                sb.table("market_prices").upsert(rows, on_conflict="ticker,price_date").execute()
+                _upsert_with_retry("market_prices", rows, on_conflict="ticker,price_date")
                 total += len(rows)
 
         logger.info("DataRefresh: market prices updated — %d rows for %d tickers", total, len(all_data))
@@ -132,7 +153,6 @@ def refresh_cross_asset_prices() -> None:
 
     try:
         data = yfinance_source.get_multiple_ohlcv(all_symbols, period="5d")
-        sb = get_supabase()
         now = datetime.now(UTC).isoformat()
         total = 0
 
@@ -151,7 +171,7 @@ def refresh_cross_asset_prices() -> None:
                     }
                 )
             if rows:
-                sb.table("cross_asset_prices").upsert(rows, on_conflict="symbol,price_date").execute()
+                _upsert_with_retry("cross_asset_prices", rows, on_conflict="symbol,price_date")
                 total += len(rows)
 
         logger.info("DataRefresh: cross-asset prices updated — %d rows for %d instruments", total, len(data))
@@ -224,7 +244,7 @@ def refresh_fundamentals() -> None:
                     "dcf_method": dcf_method,
                     "fetched_at": now,
                 }
-                sb.table("fundamentals").upsert(row, on_conflict="ticker").execute()
+                _upsert_with_retry("fundamentals", [row], on_conflict="ticker")
                 updated += 1
         except Exception:
             logger.debug("DataRefresh: fundamentals failed for %s", ticker)
@@ -291,7 +311,7 @@ def refresh_earnings() -> None:
                     }
                 )
             if rows:
-                sb.table("earnings_data").upsert(rows, on_conflict="ticker,report_date").execute()
+                _upsert_with_retry("earnings_data", rows, on_conflict="ticker,report_date")
                 updated += 1
         except Exception:
             logger.debug("DataRefresh: earnings failed for %s", ticker)

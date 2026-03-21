@@ -1,13 +1,15 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
 import { Sidebar } from "@/components/sidebar";
 import { MarketStatusBar } from "@/components/market-status-bar";
 import { AnalysisProvider } from "@/context/analysis-context";
+import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
 
-const inter = Inter({
-  variable: "--font-inter",
+const ibmPlex = IBM_Plex_Sans({
+  variable: "--font-ibm-plex",
   subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
   display: "swap",
 });
 
@@ -29,19 +31,29 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Prevent flash of wrong theme by setting class before paint */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("qp-theme");if(t==="light")return;document.documentElement.classList.add("dark")}catch(e){}})()`,
+          }}
+        />
+      </head>
       <body
-        className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased bg-background`}
+        className={`${ibmPlex.variable} ${jetbrainsMono.variable} font-sans antialiased bg-background`}
       >
-        <AnalysisProvider>
-          <Sidebar />
-          <main className="ml-[250px] min-h-screen transition-all duration-200">
-            <div className="max-w-[1400px] mx-auto px-10 py-8">
-              <MarketStatusBar />
-              {children}
-            </div>
-          </main>
-        </AnalysisProvider>
+        <ThemeProvider>
+          <AnalysisProvider>
+            <Sidebar />
+            <main className="min-h-screen transition-all duration-200 ml-0 md:ml-[72px] lg:ml-[250px]">
+              <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-6 lg:py-8">
+                <MarketStatusBar />
+                {children}
+              </div>
+            </main>
+          </AnalysisProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

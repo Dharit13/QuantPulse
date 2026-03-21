@@ -188,6 +188,14 @@ export interface AnalysisData {
     };
   };
   signals: TradeSignal[];
+  price_history?: Array<{
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  }>;
 }
 
 export interface TradeSignal {

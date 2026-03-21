@@ -38,7 +38,7 @@ export function CacheAge({ timestamp, className }: CacheAgeProps) {
   if (!label) return null;
 
   return (
-    <span className={className ?? "text-[12px] text-text-muted"}>
+    <span className={className ?? "text-[13px] font-medium bg-gradient-to-r from-[#00ccb1] via-[#7b61ff] to-[#1ca0fb] bg-clip-text text-transparent"}>
       {label}
     </span>
   );
