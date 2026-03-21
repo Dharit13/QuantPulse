@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from backend.api.ai_endpoint import router as ai_router
 from backend.api.analyzer import router as analyzer_router
 from backend.api.backtest import router as backtest_router
+from backend.api.errors import router as errors_router
 from backend.api.journal import router as journal_router
 from backend.api.news import router as news_router
 from backend.api.pipeline_status import router as pipeline_router
@@ -27,3 +28,4 @@ api_router.include_router(sectors_router)
 api_router.include_router(news_router)
 api_router.include_router(pipeline_router)
 api_router.include_router(backtest_router)
+api_router.include_router(errors_router)

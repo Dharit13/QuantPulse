@@ -1,11 +1,25 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
-// Deduplication: if multiple components request the same GET path at the same
-// time (e.g. 3 components all calling /regime/current on mount), share the
-// same in-flight promise instead of making 3 separate HTTP requests.
 const _inflight: Record<string, Promise<unknown>> = {};
 const _getCache: Record<string, { data: unknown; ts: number }> = {};
-const GET_CACHE_TTL_MS = 30_000; // 30s
+const GET_CACHE_TTL_MS = 30_000;
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  try {
+    const { getSessionToken } = await import("./supabase");
+    const token = await getSessionToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  } catch {
+    // Auth not configured — continue without token
+  }
+  return headers;
+}
 
 async function request<T>(
   path: string,
@@ -22,10 +36,11 @@ async function request<T>(
     }
 
     const { params: _, ...fetchOptions } = options || {};
+    const authHeaders = await getAuthHeaders();
     const res = await fetch(url, {
       ...fetchOptions,
       headers: {
-        "Content-Type": "application/json",
+        ...authHeaders,
         ...fetchOptions?.headers,
       },
     });

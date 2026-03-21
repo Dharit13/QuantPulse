@@ -1,7 +1,8 @@
 """QuantPulse v2 — FastAPI application.
 
-Mounts the API router, initializes the Supabase client, and configures
-the APScheduler for all recurring calibration and monitoring jobs.
+Mounts the API router, initializes middleware stack (auth, rate limiting,
+error tracking, request logging), and configures the APScheduler for all
+recurring calibration and monitoring jobs.
 """
 
 from contextlib import asynccontextmanager
@@ -9,17 +10,34 @@ from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from backend.api.router import api_router
+from backend.config import settings
+from backend.logging_config import setup_logging
+from backend.middleware.auth import AuthMiddleware
+from backend.middleware.error_tracking import ErrorTrackingMiddleware
+from backend.middleware.request_logging import RequestLoggingMiddleware
 from backend.scheduler import register_all_jobs
+from backend.websocket.routes import router as ws_router
+
+setup_logging()
 
 scheduler = BackgroundScheduler()
+limiter = Limiter(key_func=get_remote_address, default_limits=[settings.rate_limit_default])
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import logging
+    import threading
+
     log = logging.getLogger(__name__)
+
+    from backend.websocket.manager import manager
+    await manager.start_redis_listener()
 
     def _startup_tasks():
         try:
@@ -36,10 +54,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("Startup: scheduler failed (non-fatal): %s", e)
 
-    import threading
     threading.Thread(target=_startup_tasks, daemon=True).start()
-
-    import threading
 
     def _warmup():
         import logging
@@ -77,6 +92,9 @@ async def lifespan(app: FastAPI):
     def _prewarm_dashboard_ai(regime_data: dict, log):
         """Pre-compute the 4 dashboard AI summaries so the frontend loads instantly."""
         try:
+            import hashlib
+            import json
+
             from backend.ai.market_ai import (
                 ai_allocation_explain,
                 ai_market_action_banner,
@@ -84,8 +102,6 @@ async def lifespan(app: FastAPI):
                 ai_regime_probs,
             )
             from backend.data.cache import data_cache
-
-            import hashlib, json
 
             def _cache_key(req_type: str, data: dict) -> str:
                 fp = {"regime": data.get("regime", ""), "vix": round(data.get("vix", 0), 0), "confidence": round(data.get("confidence", 0), 1)}
@@ -116,6 +132,8 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_warmup, daemon=True).start()
 
     yield
+
+    await manager.shutdown()
     scheduler.shutdown(wait=False)
 
 
@@ -126,17 +144,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── Rate Limiting ──
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── Middleware stack (order matters: last added = first executed) ──
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(ErrorTrackingMiddleware)
+app.add_middleware(AuthMiddleware)
+
+# ── CORS ──
+allowed_origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── Routes ──
 app.include_router(api_router)
+app.include_router(ws_router)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "2.0.0"}
+    from backend.redis_client import redis_available
+    from backend.websocket.manager import manager
+
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "redis": redis_available(),
+        "ws_clients": manager.client_count,
+        "auth_enabled": settings.auth_enabled,
+    }

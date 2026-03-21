@@ -8,39 +8,42 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.23",
     "httpx>=0.27",
-
     # Data
     "yfinance>=1.2",
     "pandas>=2.2",
     "numpy>=2.0",
-
     # Quant / Stats
     "scipy>=1.12",
     "statsmodels>=0.14",
-
     # ML / NLP
     "transformers>=4.38",
     "torch>=2.2",
     "vaderSentiment>=3.3",
-
     # Database
     "supabase>=2.0",
-
+    "redis>=5.0",
+    # Task Queue
+    "arq>=0.26",
     # Scheduling
     "apscheduler>=3.10",
-
     # Config
     "pydantic>=2.6",
     "pydantic-settings>=2.1",
     "python-dotenv>=1.0",
-
     # HTTP / Scraping
     "requests>=2.32",
     "beautifulsoup4>=4.12",
     "lxml>=5.2",
-
+    # Auth
+    "PyJWT>=2.8",
+    # Rate Limiting
+    "slowapi>=0.1.9",
+    # Migrations
+    "alembic>=1.13",
+    "sqlalchemy>=2.0",
     # Alerts (optional)
     "slack-sdk>=3.27",
+    "psycopg2-binary>=2.9.11",
 ]
 
 [project.optional-dependencies]

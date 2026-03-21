@@ -47,7 +47,6 @@ class Settings(BaseSettings):
     portfolio_bluechip_tickers: str = "AAPL,MSFT,GOOGL,AMZN,NVDA,META,BRK-B,JPM,UNH,V"
 
     # ── Position Sizing ──
-    # "quarter_kelly" (conservative default), "half_kelly", "equal_risk"
     sizing_mode: str = "quarter_kelly"
     equal_risk_per_trade_pct: float = 0.01
 
@@ -57,6 +56,20 @@ class Settings(BaseSettings):
     # ── Database (Supabase) ──
     supabase_url: str = ""
     supabase_key: str = ""
+    supabase_jwt_secret: str = ""
+    database_url: str = ""
+
+    # ── Redis (Railway addon) ──
+    redis_url: str = ""
+
+    # ── Auth ──
+    auth_enabled: bool = False
+    allowed_origins: str = "http://localhost:3000"
+
+    # ── Rate Limiting ──
+    rate_limit_default: str = "60/minute"
+    rate_limit_ai: str = "10/minute"
+    rate_limit_scan: str = "5/minute"
 
     # ── Alert Delivery ──
     ntfy_topic: str = "quantpulse-alerts"
