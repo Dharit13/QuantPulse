@@ -64,6 +64,11 @@ async def get_current_regime(
     refresh: bool = Query(False, description="Force live computation, bypass pipeline cache"),
 ) -> dict:
     """Return the current market regime from pipeline cache (instant) or live."""
+    if not refresh:
+        full = data_cache.get("pipeline:regime:full")
+        if full and isinstance(full, dict):
+            return full
+
     result = None
     if not refresh:
         cached = data_cache.get("pipeline:regime")
@@ -80,6 +85,8 @@ async def get_current_regime(
 
     result["strategy_activity"] = _get_strategy_activity()
     result["strategy_health"] = _get_strategy_health(result.get("regime"))
+
+    data_cache.set("pipeline:regime:full", result, ttl_hours=0.2)
     return result
 
 

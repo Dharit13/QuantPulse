@@ -1,67 +1,258 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --color-background: #f5f5f0;
-  --color-foreground: #0a0b09;
+  --color-background: var(--qp-background);
+  --color-foreground: var(--qp-foreground);
 
-  --color-card: #ffffff;
-  --color-card-hover: #fafaf8;
-  --color-card-alt: #f9f9f6;
-  --color-border: #e8e8e3;
-  --color-border-hover: #d5d5ce;
+  --color-card: var(--qp-card);
+  --color-card-hover: var(--qp-card-hover);
+  --color-card-alt: var(--qp-card-alt);
+  --color-border: var(--qp-border);
+  --color-border-hover: var(--qp-border-hover);
 
-  --color-text-primary: #0a0b09;
-  --color-text-secondary: #52524c;
-  --color-text-muted: #85857e;
-  --color-text-body: #3d3d38;
-  --color-text-bright: #2d2d28;
+  --color-text-primary: var(--qp-text-primary);
+  --color-text-secondary: var(--qp-text-secondary);
+  --color-text-muted: var(--qp-text-muted);
+  --color-text-body: var(--qp-text-body);
+  --color-text-bright: var(--qp-text-bright);
 
-  --color-accent: #539616;
-  --color-accent-light: #6db52a;
-  --color-accent-bg: rgba(83, 150, 22, 0.08);
-  --color-accent-bg-strong: rgba(83, 150, 22, 0.14);
+  --color-accent: var(--qp-accent);
+  --color-accent-light: var(--qp-accent-light);
+  --color-accent-bg: var(--qp-accent-bg);
+  --color-accent-bg-strong: var(--qp-accent-bg-strong);
 
-  --color-gold: #c6a339;
-  --color-gold-light: #d8d1af;
-  --color-gold-bg: rgba(198, 163, 57, 0.1);
+  --color-gold: var(--qp-gold);
+  --color-gold-light: var(--qp-gold-light);
+  --color-gold-bg: var(--qp-gold-bg);
 
-  --color-olive: #565845;
-  --color-olive-bg: rgba(86, 88, 69, 0.08);
+  --color-olive: var(--qp-olive);
+  --color-olive-bg: var(--qp-olive-bg);
 
-  --color-qp-green: #2d9d3a;
-  --color-qp-red: #d44040;
-  --color-qp-amber: #c68a1a;
-  --color-qp-blue: #3b7dd8;
-  --color-qp-purple: #6c5ce7;
+  --color-qp-green: var(--qp-green);
+  --color-qp-red: var(--qp-red);
+  --color-qp-amber: var(--qp-amber);
+  --color-qp-blue: var(--qp-blue);
+  --color-qp-purple: var(--qp-purple);
 
-  --color-qp-green-bg: rgba(45, 157, 58, 0.08);
-  --color-qp-green-bg-subtle: rgba(45, 157, 58, 0.04);
-  --color-qp-red-bg: rgba(212, 64, 64, 0.08);
-  --color-qp-red-bg-subtle: rgba(212, 64, 64, 0.04);
-  --color-qp-amber-bg: rgba(198, 138, 26, 0.08);
-  --color-qp-amber-bg-subtle: rgba(198, 138, 26, 0.04);
-  --color-qp-blue-bg: rgba(59, 125, 216, 0.08);
-  --color-qp-blue-bg-subtle: rgba(59, 125, 216, 0.04);
-  --color-qp-purple-bg: rgba(108, 92, 231, 0.08);
+  --color-qp-green-bg: var(--qp-green-bg);
+  --color-qp-green-bg-subtle: var(--qp-green-bg-subtle);
+  --color-qp-red-bg: var(--qp-red-bg);
+  --color-qp-red-bg-subtle: var(--qp-red-bg-subtle);
+  --color-qp-amber-bg: var(--qp-amber-bg);
+  --color-qp-amber-bg-subtle: var(--qp-amber-bg-subtle);
+  --color-qp-blue-bg: var(--qp-blue-bg);
+  --color-qp-blue-bg-subtle: var(--qp-blue-bg-subtle);
+  --color-qp-purple-bg: var(--qp-purple-bg);
 
-  --font-sans: var(--font-inter);
+  --font-sans: var(--font-ibm-plex);
   --font-mono: var(--font-jetbrains-mono);
+  --font-heading: var(--font-ibm-plex);
 
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 20px;
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 
+  /* shadcn theme mappings */
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+}
+
+/* --- Light mode --- */
+:root {
+  --radius: 0.625rem;
+
+  /* shadcn */
+  --background: #f5f5f0;
+  --foreground: #0a0b09;
+  --card: #ffffff;
+  --card-foreground: #0a0b09;
+  --popover: #ffffff;
+  --popover-foreground: #0a0b09;
+  --primary: #539616;
+  --primary-foreground: #ffffff;
+  --secondary: #f9f9f6;
+  --secondary-foreground: #3d3d38;
+  --muted: #f5f5f0;
+  --muted-foreground: #85857e;
+  --accent: #f9f9f6;
+  --accent-foreground: #0a0b09;
+  --destructive: #d44040;
+  --border: #e8e8e3;
+  --input: #e8e8e3;
+  --ring: #539616;
+  --chart-1: #539616;
+  --chart-2: #3b7dd8;
+  --chart-3: #c6a339;
+  --chart-4: #6c5ce7;
+  --chart-5: #d44040;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #0a0b09;
+  --sidebar-primary: #539616;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f9f9f6;
+  --sidebar-accent-foreground: #0a0b09;
+  --sidebar-border: #e8e8e3;
+  --sidebar-ring: #539616;
+
+  /* QuantPulse tokens */
+  --qp-background: #f5f5f0;
+  --qp-foreground: #0a0b09;
+  --qp-card: #ffffff;
+  --qp-card-hover: #fafaf8;
+  --qp-card-alt: #f9f9f6;
+  --qp-border: #e8e8e3;
+  --qp-border-hover: #d5d5ce;
+  --qp-text-primary: #0a0b09;
+  --qp-text-secondary: #52524c;
+  --qp-text-muted: #85857e;
+  --qp-text-body: #3d3d38;
+  --qp-text-bright: #2d2d28;
+  --qp-accent: #539616;
+  --qp-accent-light: #6db52a;
+  --qp-accent-bg: rgba(83, 150, 22, 0.08);
+  --qp-accent-bg-strong: rgba(83, 150, 22, 0.14);
+  --qp-gold: #c6a339;
+  --qp-gold-light: #d8d1af;
+  --qp-gold-bg: rgba(198, 163, 57, 0.1);
+  --qp-olive: #565845;
+  --qp-olive-bg: rgba(86, 88, 69, 0.08);
+  --qp-green: #2d9d3a;
+  --qp-red: #d44040;
+  --qp-amber: #c68a1a;
+  --qp-blue: #3b7dd8;
+  --qp-purple: #6c5ce7;
+  --qp-green-bg: rgba(45, 157, 58, 0.08);
+  --qp-green-bg-subtle: rgba(45, 157, 58, 0.04);
+  --qp-red-bg: rgba(212, 64, 64, 0.08);
+  --qp-red-bg-subtle: rgba(212, 64, 64, 0.04);
+  --qp-amber-bg: rgba(198, 138, 26, 0.08);
+  --qp-amber-bg-subtle: rgba(198, 138, 26, 0.04);
+  --qp-blue-bg: rgba(59, 125, 216, 0.08);
+  --qp-blue-bg-subtle: rgba(59, 125, 216, 0.04);
+  --qp-purple-bg: rgba(108, 92, 231, 0.08);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
   --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.03);
   --shadow-sidebar: 2px 0 12px rgba(0, 0, 0, 0.04);
 }
 
+/* --- Dark mode (premium fintech palette — TradingView / Linear inspired) --- */
+.dark {
+  /* shadcn */
+  --background: #06090f;
+  --foreground: #f1f5f9;
+  --card: #111827;
+  --card-foreground: #f1f5f9;
+  --popover: #111827;
+  --popover-foreground: #f1f5f9;
+  --primary: #00ccb1;
+  --primary-foreground: #06090f;
+  --secondary: #1a2332;
+  --secondary-foreground: #f1f5f9;
+  --muted: #1a2332;
+  --muted-foreground: #8896a7;
+  --accent: #1a2332;
+  --accent-foreground: #f1f5f9;
+  --destructive: #f43f5e;
+  --border: #1e293b;
+  --input: #1e293b;
+  --ring: #00ccb1;
+  --chart-1: #10b981;
+  --chart-2: #3b82f6;
+  --chart-3: #f59e0b;
+  --chart-4: #8b5cf6;
+  --chart-5: #f43f5e;
+  --sidebar: #0b1018;
+  --sidebar-foreground: #f1f5f9;
+  --sidebar-primary: #00ccb1;
+  --sidebar-primary-foreground: #06090f;
+  --sidebar-accent: #151d2a;
+  --sidebar-accent-foreground: #f1f5f9;
+  --sidebar-border: #1a2332;
+  --sidebar-ring: #00ccb1;
+
+  /* QuantPulse tokens */
+  --qp-background: #06090f;
+  --qp-foreground: #f1f5f9;
+  --qp-card: #111827;
+  --qp-card-hover: #1a2332;
+  --qp-card-alt: #0d1420;
+  --qp-border: #1e293b;
+  --qp-border-hover: #2d3c50;
+  --qp-text-primary: #f1f5f9;
+  --qp-text-secondary: #8896a7;
+  --qp-text-muted: #5c6d80;
+  --qp-text-body: #bcc7d4;
+  --qp-text-bright: #dfe7ef;
+  --qp-accent: #00ccb1;
+  --qp-accent-light: #34d4b0;
+  --qp-accent-bg: rgba(0, 204, 177, 0.10);
+  --qp-accent-bg-strong: rgba(0, 204, 177, 0.18);
+  --qp-gold: #f59e0b;
+  --qp-gold-light: #fbbf24;
+  --qp-gold-bg: rgba(245, 158, 11, 0.10);
+  --qp-olive: #8896a7;
+  --qp-olive-bg: rgba(136, 150, 167, 0.08);
+  --qp-green: #10b981;
+  --qp-red: #f43f5e;
+  --qp-amber: #f59e0b;
+  --qp-blue: #3b82f6;
+  --qp-purple: #8b5cf6;
+  --qp-green-bg: rgba(16, 185, 129, 0.10);
+  --qp-green-bg-subtle: rgba(16, 185, 129, 0.05);
+  --qp-red-bg: rgba(244, 63, 94, 0.10);
+  --qp-red-bg-subtle: rgba(244, 63, 94, 0.05);
+  --qp-amber-bg: rgba(245, 158, 11, 0.10);
+  --qp-amber-bg-subtle: rgba(245, 158, 11, 0.05);
+  --qp-blue-bg: rgba(59, 130, 246, 0.10);
+  --qp-blue-bg-subtle: rgba(59, 130, 246, 0.05);
+  --qp-purple-bg: rgba(139, 92, 246, 0.10);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.2);
+  --shadow-sidebar: 2px 0 16px rgba(0, 0, 0, 0.35);
+}
+
 body {
-  background: var(--color-background);
-  color: var(--color-foreground);
+  background: var(--qp-background);
+  color: var(--qp-foreground);
   font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, sans-serif;
   min-height: 100vh;
+  overflow-x: hidden;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 /* QuantPulse loading animation */
@@ -108,6 +299,85 @@ body {
   animation: qp-bar-pulse 1.6s ease-in-out infinite;
 }
 
+/* Gradient shimmer border */
+@keyframes shimmer-border {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 300% 50%;
+  }
+}
+
+.shimmer-border {
+  animation: shimmer-border 3s linear infinite;
+}
+
+/* Aurora animation for 21st.dev AuroraBackground */
+@keyframes aurora {
+  from {
+    background-position: 50% 50%, 50% 50%;
+  }
+  to {
+    background-position: 350% 50%, 350% 50%;
+  }
+}
+
+@theme inline {
+  --animate-aurora: aurora 60s linear infinite;
+}
+
+/* Glowing effect glow class */
+.glow {
+  position: absolute;
+  inset: 0;
+}
+
+/* Rotating gradient border — pure CSS, always visible */
+@property --gradient-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes gradient-rotate {
+  to { --gradient-angle: 360deg; }
+}
+
+.gradient-border {
+  background: conic-gradient(
+    from var(--gradient-angle),
+    #00ccb1,
+    #7b61ff,
+    #1ca0fb,
+    #6366f1,
+    #00ccb1
+  );
+  animation: gradient-rotate 3s linear infinite;
+}
+
+@keyframes gradient-glow-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.gradient-border-glow {
+  animation: gradient-glow-pulse 3s ease-in-out infinite;
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  animation: marquee 30s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
 /* Entry animations */
 @keyframes qp-fade-in {
   from {
@@ -146,13 +416,21 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  .shimmer-border {
+    animation: none !important;
+  }
+  canvas {
+    display: none !important;
+  }
 }
 
-/* Focus-visible ring */
-*:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: 4px;
+/* Focus-visible ring — inside @layer so Tailwind utilities can override */
+@layer base {
+  *:focus-visible {
+    outline: 2px solid var(--qp-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 }
 
 ::-webkit-scrollbar {
@@ -163,10 +441,18 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d5d5ce;
+  background: var(--qp-border);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #b5b5ae;
+  background: var(--qp-border-hover);
 }
 
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

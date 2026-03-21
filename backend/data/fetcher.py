@@ -5,6 +5,7 @@ The background refresh scheduler keeps tables populated; this module reads them.
 """
 
 import logging
+import threading
 from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
@@ -14,6 +15,8 @@ from backend.data.sources.yfinance_src import yfinance_source
 from backend.models.database import get_supabase
 
 logger = logging.getLogger(__name__)
+
+_DB_READ_TIMEOUT = 10  # seconds — fail fast, fall through to yfinance
 
 
 class DataFetcher:
@@ -68,34 +71,43 @@ class DataFetcher:
         return df
 
     def _read_ohlcv_from_db(self, ticker: str, period: str) -> pd.DataFrame:
-        """Read OHLCV from the market_prices table and return as DataFrame."""
-        try:
-            days = self._period_to_days(period)
-            cutoff = str(date.today() - timedelta(days=days))
+        """Read OHLCV from the market_prices table with a timeout guard."""
+        result_holder: list[pd.DataFrame] = [pd.DataFrame()]
 
-            sb = get_supabase()
-            result = (
-                sb.table("market_prices")
-                .select("price_date,open,high,low,close,volume")
-                .eq("ticker", ticker)
-                .gte("price_date", cutoff)
-                .order("price_date")
-                .execute()
-            )
+        def _query():
+            try:
+                days = self._period_to_days(period)
+                cutoff = str(date.today() - timedelta(days=days))
 
-            if not result.data:
-                return pd.DataFrame()
+                sb = get_supabase()
+                result = (
+                    sb.table("market_prices")
+                    .select("price_date,open,high,low,close,volume")
+                    .eq("ticker", ticker)
+                    .gte("price_date", cutoff)
+                    .order("price_date")
+                    .execute()
+                )
 
-            df = pd.DataFrame(result.data)
-            df["price_date"] = pd.to_datetime(df["price_date"])
-            df = df.set_index("price_date")
-            df.index.name = "Date"
-            df.columns = ["Open", "High", "Low", "Close", "Volume"]
-            df = df.dropna(subset=["Close"])
-            return df
-        except Exception:
-            logger.debug("DB read failed for OHLCV %s, will use API", ticker)
-            return pd.DataFrame()
+                if not result.data:
+                    return
+
+                df = pd.DataFrame(result.data)
+                df["price_date"] = pd.to_datetime(df["price_date"])
+                df = df.set_index("price_date")
+                df.index.name = "Date"
+                df.columns = ["Open", "High", "Low", "Close", "Volume"]
+                df = df.dropna(subset=["Close"])
+                result_holder[0] = df
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_query, daemon=True)
+        t.start()
+        t.join(timeout=_DB_READ_TIMEOUT)
+        if t.is_alive():
+            logger.debug("DB read timed out for %s after %ds, falling through to API", ticker, _DB_READ_TIMEOUT)
+        return result_holder[0]
 
     def get_multiple_ohlcv(self, tickers: list[str], period: str = "2y") -> dict[str, pd.DataFrame]:
         result = {}
