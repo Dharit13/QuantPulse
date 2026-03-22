@@ -8,7 +8,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { useSSEScan, type SSEScanActions } from "@/hooks/use-sse-scan";
+import { useSSEScan } from "@/hooks/use-sse-scan";
 import type { AnalysisData } from "@/lib/types";
 
 interface AnalysisState {

@@ -35,7 +35,8 @@ async function request<T>(
       url += `?${search.toString()}`;
     }
 
-    const { params: _, ...fetchOptions } = options || {};
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { params, ...fetchOptions } = options || {};
     const authHeaders = await getAuthHeaders();
     const res = await fetch(url, {
       ...fetchOptions,
