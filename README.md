@@ -42,7 +42,7 @@ graph TB
     subgraph backendWorker ["Backend Worker -- Railway Service 2"]
         Scheduler["APScheduler<br/>2m-weekly jobs"]
         ARQWorker["ARQ Task Queue<br/>retry, timeout"]
-        AlertDispatch["Alert Dispatcher<br/>ntfy, Slack, SendGrid"]
+        AlertDispatch["Alert Dispatcher<br/>SendGrid email"]
         AIEngine["Claude AI"]
     end
 
@@ -410,7 +410,7 @@ backend/
   tracker/        # Trade journal, strategy performance, signal audit, shadow book
   ai/             # Claude AI integration (market summaries, analysis, overnight scanner)
   prompts/        # LLM system prompts (.txt), including overnight_scanner
-  alerts/         # Alert dispatcher (ntfy, Slack, SendGrid)
+  alerts/         # Alert dispatcher (SendGrid email; ntfy + Slack scaffolded)
   middleware/     # Auth, error tracking, request logging
   tasks/          # ARQ task queue, TaskState, worker
   websocket/      # WebSocket manager, routes, Redis pub/sub

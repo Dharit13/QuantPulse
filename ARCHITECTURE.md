@@ -40,7 +40,7 @@ graph TB
     subgraph backendWorker ["Backend Worker — Railway Service 2"]
         Scheduler["APScheduler<br/>2m-weekly jobs"]
         ARQWorker["ARQ Task Queue<br/>retry, timeout, persistence"]
-        AlertDispatch["Alert Dispatcher<br/>ntfy, Slack, SendGrid"]
+        AlertDispatch["Alert Dispatcher<br/>SendGrid email"]
         AIEngine["Claude AI<br/>market summaries, analysis,<br/>overnight scanner"]
     end
 
