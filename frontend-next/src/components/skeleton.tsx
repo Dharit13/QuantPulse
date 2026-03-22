@@ -53,6 +53,11 @@ export function TradeCardSkeleton() {
   );
 }
 
+const CHART_BAR_HEIGHTS = [
+  45, 72, 33, 58, 80, 27, 65, 50, 38, 75, 42, 68,
+  55, 30, 78, 48, 62, 35, 70, 52, 40, 74, 56, 28,
+];
+
 export function ChartSkeleton({ height = 320 }: { height?: number }) {
   return (
     <div
@@ -60,11 +65,11 @@ export function ChartSkeleton({ height = 320 }: { height?: number }) {
       style={{ height }}
     >
       <div className="h-full flex items-end gap-1 px-6 pb-6 pt-10">
-        {Array.from({ length: 24 }).map((_, i) => (
+        {CHART_BAR_HEIGHTS.map((h, i) => (
           <Skeleton
             key={i}
             className="flex-1"
-            style={{ height: `${20 + Math.random() * 60}%` }}
+            style={{ height: `${h}%` }}
           />
         ))}
       </div>

@@ -6,7 +6,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { PulseLoader, PulseInline } from "@/components/pulse-loader";
 import { AICard } from "@/components/ai-card";
 import { TradeCard } from "@/components/trade-card";
-import { Badge } from "@/components/badge";
 import { MarketActionBanner } from "@/components/market-action-banner";
 import { CacheAge } from "@/components/cache-age";
 import { AnimatedNumber } from "@/components/animated-number";

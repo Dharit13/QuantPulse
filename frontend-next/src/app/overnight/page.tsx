@@ -120,7 +120,7 @@ function getConfidenceColor(value: number): string {
   return CONFIDENCE_COLORS.low;
 }
 
-function PickCard({ pick, type, rank }: { pick: OvernightPick; type: "stock" | "crypto"; rank: number }) {
+function PickCard({ pick, rank }: { pick: OvernightPick; type: "stock" | "crypto"; rank: number }) {
   const [expanded, setExpanded] = useState(false);
   const confColor = getConfidenceColor(pick.confidence);
 

@@ -5,7 +5,6 @@ import { ExternalLink, Search, RefreshCw, Newspaper, Sparkles } from "lucide-rea
 import { PageHeader } from "@/components/page-header";
 import { GradientCard, GradientButton } from "@/components/gradient-card";
 import { GlowingEffect } from "@/components/ui/glowing-effect";
-import { AICard } from "@/components/ai-card";
 import { SlideUp, StaggerGroup, StaggerItem } from "@/components/motion-primitives";
 import { PulseInline } from "@/components/pulse-loader";
 import { Badge } from "@/components/badge";
@@ -55,7 +54,7 @@ function timeAgo(dateStr: string): string {
   }
 }
 
-function NewsCard({ item, index }: { item: NewsItem; index: number }) {
+function NewsCard({ item }: { item: NewsItem }) {
   const ago = timeAgo(item.published_at);
 
   return (
@@ -265,7 +264,7 @@ export default function NewsPage() {
               ) : tickerNews.length > 0 ? (
                 <StaggerGroup className="space-y-2">
                   {tickerNews.slice(0, 10).map((item, i) => (
-                    <NewsCard key={`${item.title}-${i}`} item={item} index={i} />
+                    <NewsCard key={`${item.title}-${i}`} item={item} />
                   ))}
                 </StaggerGroup>
               ) : (
@@ -345,7 +344,7 @@ export default function NewsPage() {
             ) : marketNews.length > 0 ? (
               <StaggerGroup className="space-y-2">
                 {marketNews.slice(0, 10).map((item, i) => (
-                  <NewsCard key={`${item.title}-${i}`} item={item} index={i} />
+                  <NewsCard key={`${item.title}-${i}`} item={item} />
                 ))}
               </StaggerGroup>
             ) : (

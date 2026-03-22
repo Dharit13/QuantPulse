@@ -14,6 +14,7 @@ interface AICardProps {
 export function AICard({
   title,
   children,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   accentColor = "#00ccb1",
   className,
 }: AICardProps) {
