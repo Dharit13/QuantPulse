@@ -35,8 +35,7 @@ def _upsert_with_retry(table: str, rows: list[dict], on_conflict: str) -> None:
             except Exception as e:
                 err_msg = str(e).lower()
                 retriable = any(
-                    k in err_msg
-                    for k in ["timeout", "57014", "disconnected", "connection", "reset", "broken pipe"]
+                    k in err_msg for k in ["timeout", "57014", "disconnected", "connection", "reset", "broken pipe"]
                 )
                 if retriable and attempt < _MAX_RETRIES:
                     reset_client()

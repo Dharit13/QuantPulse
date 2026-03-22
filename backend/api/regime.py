@@ -96,16 +96,18 @@ async def get_regime_history(limit: int = Query(default=30, ge=1, le=365)) -> li
     """Return recent regime snapshots from the database."""
     sb = get_supabase()
     result = sb.table("regimes").select("*").order("timestamp", desc=True).limit(limit).execute()
-    return ok([
-        RegimeSnapshot(
-            timestamp=r["timestamp"],
-            regime=Regime(r["regime"]),
-            confidence=r["confidence"],
-            regime_probabilities=json.loads(r["regime_probabilities_json"]),
-            vix=r["vix"],
-            breadth_pct=r["breadth_pct"],
-            adx=r["adx"],
-            strategy_weights=json.loads(r["strategy_weights_json"]),
-        )
-        for r in result.data
-    ])
+    return ok(
+        [
+            RegimeSnapshot(
+                timestamp=r["timestamp"],
+                regime=Regime(r["regime"]),
+                confidence=r["confidence"],
+                regime_probabilities=json.loads(r["regime_probabilities_json"]),
+                vix=r["vix"],
+                breadth_pct=r["breadth_pct"],
+                adx=r["adx"],
+                strategy_weights=json.loads(r["strategy_weights_json"]),
+            )
+            for r in result.data
+        ]
+    )

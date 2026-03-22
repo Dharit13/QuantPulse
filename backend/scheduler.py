@@ -317,10 +317,14 @@ def _run_data_cleanup() -> None:
 
 def _run_overnight_scan_stocks() -> None:
     """Scheduled: run overnight stock scan at 3 PM ET."""
-    from backend.data.sources.overnight_src import DEFAULT_STOCKS, assemble_macro_data, assemble_stock_data
     from backend.ai.market_ai import ai_overnight_analysis
-    from backend.data.sources.overnight_src import log_scan_result
     from backend.data.cache import data_cache as _dc
+    from backend.data.sources.overnight_src import (
+        DEFAULT_STOCKS,
+        assemble_macro_data,
+        assemble_stock_data,
+        log_scan_result,
+    )
 
     try:
         stock_data = assemble_stock_data(DEFAULT_STOCKS)
@@ -328,13 +332,15 @@ def _run_overnight_scan_stocks() -> None:
         analysis = ai_overnight_analysis(stock_data, {}, macro_data)
         if analysis:
             log_scan_result(analysis)
-            _dc.set("overnight:last_result", {
-                "analysis": analysis,
-                "timestamp": __import__("datetime").datetime.now(
-                    __import__("datetime").UTC
-                ).isoformat(),
-                "mode": "stocks",
-            }, ttl_hours=4.0)
+            _dc.set(
+                "overnight:last_result",
+                {
+                    "analysis": analysis,
+                    "timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+                    "mode": "stocks",
+                },
+                ttl_hours=4.0,
+            )
             logger.info("Scheduled overnight stock scan complete")
     except Exception as e:
         logger.exception("Scheduled overnight stock scan failed: %s", e)
@@ -342,10 +348,14 @@ def _run_overnight_scan_stocks() -> None:
 
 def _run_overnight_scan_crypto() -> None:
     """Scheduled: run overnight crypto scan every 6 hours."""
-    from backend.data.sources.overnight_src import DEFAULT_CRYPTO, assemble_crypto_data, assemble_macro_data
     from backend.ai.market_ai import ai_overnight_analysis
-    from backend.data.sources.overnight_src import log_scan_result
     from backend.data.cache import data_cache as _dc
+    from backend.data.sources.overnight_src import (
+        DEFAULT_CRYPTO,
+        assemble_crypto_data,
+        assemble_macro_data,
+        log_scan_result,
+    )
 
     try:
         crypto_data = assemble_crypto_data(DEFAULT_CRYPTO)
@@ -353,13 +363,15 @@ def _run_overnight_scan_crypto() -> None:
         analysis = ai_overnight_analysis({}, crypto_data, macro_data)
         if analysis:
             log_scan_result(analysis)
-            _dc.set("overnight:last_result", {
-                "analysis": analysis,
-                "timestamp": __import__("datetime").datetime.now(
-                    __import__("datetime").UTC
-                ).isoformat(),
-                "mode": "crypto",
-            }, ttl_hours=4.0)
+            _dc.set(
+                "overnight:last_result",
+                {
+                    "analysis": analysis,
+                    "timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+                    "mode": "crypto",
+                },
+                ttl_hours=4.0,
+            )
             logger.info("Scheduled overnight crypto scan complete")
     except Exception as e:
         logger.exception("Scheduled overnight crypto scan failed: %s", e)

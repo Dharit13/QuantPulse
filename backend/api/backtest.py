@@ -59,11 +59,13 @@ async def start_seed() -> dict:
     """Kick off a backtest seed run in the background."""
     with _seed_lock:
         if _seed_state["status"] == "scanning":
-            return ok({
-                "status": "already_running",
-                "progress": _seed_state["progress"],
-                "total": _seed_state["total"],
-            })
+            return ok(
+                {
+                    "status": "already_running",
+                    "progress": _seed_state["progress"],
+                    "total": _seed_state["total"],
+                }
+            )
 
         _seed_state["status"] = "scanning"
         _seed_state["progress"] = 0
@@ -79,12 +81,14 @@ async def start_seed() -> dict:
 @router.get("/status")
 async def get_seed_status() -> dict:
     """Poll backtest seed progress."""
-    return ok({
-        "status": _seed_state["status"],
-        "progress": _seed_state["progress"],
-        "total": _seed_state["total"],
-        "step": _seed_state.get("step", ""),
-        "result": _seed_state["result"],
-        "started_at": _seed_state.get("started_at"),
-        "error": _seed_state["error"],
-    })
+    return ok(
+        {
+            "status": _seed_state["status"],
+            "progress": _seed_state["progress"],
+            "total": _seed_state["total"],
+            "step": _seed_state.get("step", ""),
+            "result": _seed_state["result"],
+            "started_at": _seed_state.get("started_at"),
+            "error": _seed_state["error"],
+        }
+    )

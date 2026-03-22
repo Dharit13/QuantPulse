@@ -72,7 +72,9 @@ async def task_run_sectors(ctx: dict | None, refresh: bool = False, **kwargs: An
         raise
 
 
-async def task_run_swing(ctx: dict | None, min_return_pct: float = 30.0, max_hold_days: int = 10, **kwargs: Any) -> dict:
+async def task_run_swing(
+    ctx: dict | None, min_return_pct: float = 30.0, max_hold_days: int = 10, **kwargs: Any
+) -> dict:
     """Run swing picks scan as a background task."""
     try:
         from backend.api.swing_picks import _run_scan_background

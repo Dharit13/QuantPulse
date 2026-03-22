@@ -34,8 +34,7 @@ def _with_retry(fn):
         except Exception as e:
             err_msg = str(e).lower()
             is_connection_err = any(
-                k in err_msg
-                for k in ["disconnected", "connection", "reset", "broken pipe", "timeout"]
+                k in err_msg for k in ["disconnected", "connection", "reset", "broken pipe", "timeout"]
             )
             if is_connection_err and attempt < MAX_RETRIES:
                 reset_client()
@@ -69,6 +68,7 @@ class DataCache:
     def _get_redis(self):
         if not self._redis_checked:
             from backend.redis_client import get_redis
+
             self._redis = get_redis()
             self._redis_checked = True
         return self._redis
@@ -193,9 +193,7 @@ class DataCache:
             if ids:
                 for i in range(0, len(ids), 50):
                     batch = ids[i : i + 50]
-                    _with_retry(
-                        lambda b=batch: get_supabase().table("data_cache").delete().in_("id", b).execute()
-                    )
+                    _with_retry(lambda b=batch: get_supabase().table("data_cache").delete().in_("id", b).execute())
                 logger.info("Cleared %d expired cache entries", len(ids))
             return len(ids)
         except Exception as e:

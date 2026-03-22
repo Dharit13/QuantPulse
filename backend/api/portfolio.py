@@ -358,15 +358,17 @@ def _sentiment_candidates(scored: dict[str, dict], wf_params: dict) -> list[dict
                 pass
             if price <= 0:
                 continue
-            candidates.append({
-                "ticker": ticker,
-                "name": ticker,
-                "sector": "Unknown",
-                "price": price,
-                "score": entry.composite_score,
-                "why": f"FinBERT sentiment {entry.composite_score:.0f}/100 ({entry.sentiment_label})",
-                "source": "sentiment",
-            })
+            candidates.append(
+                {
+                    "ticker": ticker,
+                    "name": ticker,
+                    "sector": "Unknown",
+                    "price": price,
+                    "score": entry.composite_score,
+                    "why": f"FinBERT sentiment {entry.composite_score:.0f}/100 ({entry.sentiment_label})",
+                    "source": "sentiment",
+                }
+            )
         candidates.sort(key=lambda c: c["score"], reverse=True)
         return candidates[:max_candidates]
     except Exception as exc:
@@ -392,15 +394,17 @@ def _bluechip_fallback(scored: dict[str, dict]) -> list[dict]:
             price = float(close.iloc[-1])
             ret_20d = float((close.iloc[-1] / close.iloc[-20] - 1) * 100)
             score = max(10.0, min(90.0, 50 + ret_20d * 2))
-            candidates.append({
-                "ticker": ticker,
-                "name": ticker,
-                "sector": "Unknown",
-                "price": price,
-                "score": round(score, 1),
-                "why": f"Blue-chip momentum: {ret_20d:+.1f}% (20d)",
-                "source": "bluechip",
-            })
+            candidates.append(
+                {
+                    "ticker": ticker,
+                    "name": ticker,
+                    "sector": "Unknown",
+                    "price": price,
+                    "score": round(score, 1),
+                    "why": f"Blue-chip momentum: {ret_20d:+.1f}% (20d)",
+                    "source": "bluechip",
+                }
+            )
         except Exception:
             continue
     candidates.sort(key=lambda c: c["score"], reverse=True)
@@ -698,7 +702,7 @@ def _run_portfolio_background(capital: float) -> None:
             corr_filtered.append(cand)
             accepted_tickers.append(ticker)
 
-        ranked = corr_filtered[:wf_params["max_picks"]]
+        ranked = corr_filtered[: wf_params["max_picks"]]
         logger.info(
             "Portfolio filters: %d ranked -> %d health -> %d corr -> %d final (top %d), dropped=%s",
             len(ranked_candidates),

@@ -31,7 +31,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
-            return Response(status_code=401, content='{"detail":"Missing authorization token"}', media_type="application/json")
+            return Response(
+                status_code=401, content='{"detail":"Missing authorization token"}', media_type="application/json"
+            )
 
         token = auth_header[7:]
         try:

@@ -172,6 +172,7 @@ def _run_cross_asset(vol: VolContext, regime: str) -> list[TradeSignal]:
     """Run cross-asset momentum strategy."""
     try:
         from backend.strategies.cross_asset_momentum import CrossAssetMomentumStrategy
+
         return CrossAssetMomentumStrategy().generate_signals(vol, regime=regime)
     except Exception as e:
         logger.warning("Backtest cross_asset failed: %s", e)
@@ -182,8 +183,11 @@ def _run_catalyst(vol: VolContext, regime: str, tickers: list[str]) -> list[Trad
     """Run catalyst strategy with a small ticker sample to avoid rate limits."""
     try:
         from backend.strategies.catalyst_event import CatalystEventStrategy
+
         return CatalystEventStrategy().generate_signals(
-            vol, tickers=tickers[:15], regime=regime,
+            vol,
+            tickers=tickers[:15],
+            regime=regime,
         )
     except Exception as e:
         logger.warning("Backtest catalyst failed: %s", e)
@@ -201,8 +205,7 @@ def run_backtest_seed(
     """
     checkpoints = _get_checkpoints(LOOKBACK_WEEKS)
     total_steps = len(checkpoints)
-    logger.info("Backtest seeder: %d weekly checkpoints from %s to %s",
-                total_steps, checkpoints[0], checkpoints[-1])
+    logger.info("Backtest seeder: %d weekly checkpoints from %s to %s", total_steps, checkpoints[0], checkpoints[-1])
 
     if progress_cb:
         progress_cb(0, total_steps + 2, "Clearing old backtest data...")
@@ -213,6 +216,7 @@ def run_backtest_seed(
         progress_cb(1, total_steps + 2, "Downloading historical OHLCV...")
 
     from backend.data.universe import get_all_tickers
+
     sp500 = get_all_tickers()
     cross_tickers = list(CROSS_ASSET_TICKERS.values()) + list(SECTOR_ETFS.values())
     all_tickers = list(set(sp500 + cross_tickers + ["SPY", "^VIX"]))

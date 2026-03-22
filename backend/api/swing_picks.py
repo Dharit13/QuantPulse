@@ -902,9 +902,7 @@ def _run_scan_background(min_return_pct: float, max_hold_days: int) -> None:
         quick_trades = [p for p in all_candidates if p["hold_bucket"] == "quick"][:15]
         swing_trades = [p for p in all_candidates if p["hold_bucket"] == "swing"][:15]
 
-        all_picks = sorted(
-            quick_trades + swing_trades, key=lambda x: x["score"], reverse=True
-        )
+        all_picks = sorted(quick_trades + swing_trades, key=lambda x: x["score"], reverse=True)
         _log_swing_picks_to_shadow_book(all_picks)
 
         result_data = {
@@ -1085,6 +1083,4 @@ async def get_swing_picks(
 
     loop = asyncio.get_event_loop()
     live_result = await loop.run_in_executor(_executor, _run_swing_scan, min_return_pct, max_hold_days)
-    return ok(
-        {"data": live_result, "refreshed_at": datetime.now(UTC).isoformat()}
-    )
+    return ok({"data": live_result, "refreshed_at": datetime.now(UTC).isoformat()})

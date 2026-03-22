@@ -78,7 +78,8 @@ class ScanProgressTracker:
         if self._auto_push_thread is None or not self._auto_push_thread.is_alive():
             self._auto_push_stop.clear()
             self._auto_push_thread = threading.Thread(
-                target=self._auto_push_loop, daemon=True,
+                target=self._auto_push_loop,
+                daemon=True,
             )
             self._auto_push_thread.start()
 

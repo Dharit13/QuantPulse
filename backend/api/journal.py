@@ -55,12 +55,14 @@ async def close_trade(trade_id: int, req: ExitRequest) -> dict:
     )
     if result is None:
         return err("not_found", f"Trade {trade_id} not found", status=404)
-    return ok({
-        "trade_id": trade_id,
-        "pnl_dollars": result.pnl_dollars,
-        "pnl_percent": result.pnl_percent,
-        "status": "closed",
-    })
+    return ok(
+        {
+            "trade_id": trade_id,
+            "pnl_dollars": result.pnl_dollars,
+            "pnl_percent": result.pnl_percent,
+            "status": "closed",
+        }
+    )
 
 
 @router.get("/trades/active", response_model=list[TradeEntry])

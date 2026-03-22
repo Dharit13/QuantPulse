@@ -79,26 +79,30 @@ def _persist_error(
 
             if existing.data:
                 record = existing.data[0]
-                sb.table("error_events").update({
-                    "occurrence_count": record["occurrence_count"] + 1,
-                    "last_seen": now,
-                    "stack_trace": stack_trace[:5000],
-                    "request_path": request_path,
-                    "request_method": request_method,
-                }).eq("id", record["id"]).execute()
+                sb.table("error_events").update(
+                    {
+                        "occurrence_count": record["occurrence_count"] + 1,
+                        "last_seen": now,
+                        "stack_trace": stack_trace[:5000],
+                        "request_path": request_path,
+                        "request_method": request_method,
+                    }
+                ).eq("id", record["id"]).execute()
             else:
-                sb.table("error_events").insert({
-                    "error_type": error_type,
-                    "message": message[:500],
-                    "stack_trace": stack_trace[:5000],
-                    "request_path": request_path,
-                    "request_method": request_method,
-                    "strategy": strategy,
-                    "occurrence_count": 1,
-                    "first_seen": now,
-                    "last_seen": now,
-                    "resolved": False,
-                }).execute()
+                sb.table("error_events").insert(
+                    {
+                        "error_type": error_type,
+                        "message": message[:500],
+                        "stack_trace": stack_trace[:5000],
+                        "request_path": request_path,
+                        "request_method": request_method,
+                        "strategy": strategy,
+                        "occurrence_count": 1,
+                        "first_seen": now,
+                        "last_seen": now,
+                        "resolved": False,
+                    }
+                ).execute()
         except Exception as e:
             logger.debug("Failed to persist error event: %s", e)
 

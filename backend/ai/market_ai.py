@@ -745,10 +745,7 @@ def ai_investment_research(regime: str, capital: float, picks: list[dict]) -> di
     )
     result = _call_claude(_INVEST_RESEARCH_SYSTEM, user, max_tokens=3000)
     if result and "picks" in result:
-        result["picks"] = [
-            p for p in result["picks"]
-            if p.get("invest_amount", 0) > 0 and p.get("shares", 0) > 0
-        ]
+        result["picks"] = [p for p in result["picks"] if p.get("invest_amount", 0) > 0 and p.get("shares", 0) > 0]
     return result
 
 
@@ -792,10 +789,7 @@ def ai_news_summary(ticker: str, news_items: list[dict]) -> dict | None:
     """AI briefing from a list of news headlines for a ticker."""
     if not news_items:
         return None
-    lines = [
-        f"- {item.get('title', '')} ({item.get('source', '')})"
-        for item in news_items[:15]
-    ]
+    lines = [f"- {item.get('title', '')} ({item.get('source', '')})" for item in news_items[:15]]
     user = f"Ticker: {ticker}\n\nRecent headlines:\n" + "\n".join(lines)
     return _call_claude(_NEWS_SUMMARY_SYSTEM, user, max_tokens=400)
 
@@ -821,17 +815,14 @@ def ai_overnight_analysis(
     now = _dt.now()
 
     sections = [
-        f"Here is today's pre-filtered market data with computed technical indicators.",
-        f"All RSI, Bollinger, volume ratios are pre-calculated — trust them.\n",
+        "Here is today's pre-filtered market data with computed technical indicators.",
+        "All RSI, Bollinger, volume ratios are pre-calculated — trust them.\n",
         f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S ET')}",
         f"Day of week: {now.strftime('%A')}",
     ]
 
     if current_positions:
-        sections.append(
-            f"\n=== CURRENT POSITIONS (do NOT recommend these) ===\n"
-            f"{', '.join(current_positions)}"
-        )
+        sections.append(f"\n=== CURRENT POSITIONS (do NOT recommend these) ===\n{', '.join(current_positions)}")
 
     if recent_outcomes:
         sections.append(
@@ -839,10 +830,7 @@ def ai_overnight_analysis(
             f"{json.dumps(recent_outcomes, indent=1, default=str)}"
         )
 
-    sections.append(
-        f"\n=== MACRO REGIME DATA (FRED) ===\n"
-        f"{json.dumps(macro_data, indent=1, default=str)}"
-    )
+    sections.append(f"\n=== MACRO REGIME DATA (FRED) ===\n{json.dumps(macro_data, indent=1, default=str)}")
 
     stock_count = len([k for k in stock_data if not k.startswith("_")])
     sections.append(
@@ -850,14 +838,10 @@ def ai_overnight_analysis(
         f"{json.dumps(stock_data, indent=1, default=str)}"
     )
 
-    sections.append(
-        f"\n=== CRYPTO DATA ===\n"
-        f"{json.dumps(crypto_data, indent=1, default=str)}"
-    )
+    sections.append(f"\n=== CRYPTO DATA ===\n{json.dumps(crypto_data, indent=1, default=str)}")
 
     sections.append(
-        "\nAnalyze all data. Find the best overnight swing trades. "
-        "Check cross-asset correlations. Return JSON only."
+        "\nAnalyze all data. Find the best overnight swing trades. Check cross-asset correlations. Return JSON only."
     )
 
     user = "\n".join(sections)
@@ -897,17 +881,22 @@ def _call_claude_tracked(system: str, user: str, max_tokens: int = 8000) -> dict
         cost_usd = (input_tokens * 3 + output_tokens * 15) / 1_000_000
         logger.info(
             "Overnight AI cost: %d input + %d output tokens = $%.4f",
-            input_tokens, output_tokens, cost_usd,
+            input_tokens,
+            output_tokens,
+            cost_usd,
         )
 
         from backend.data.cache import data_cache as _dc
+
         cost_log = _dc.get("overnight:cost_log") or []
-        cost_log.append({
-            "timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cost_usd": round(cost_usd, 4),
-        })
+        cost_log.append(
+            {
+                "timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": round(cost_usd, 4),
+            }
+        )
         _dc.set("overnight:cost_log", cost_log[-100:], ttl_hours=720.0)
 
         return _extract_json(raw)

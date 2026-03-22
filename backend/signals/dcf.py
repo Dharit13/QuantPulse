@@ -322,8 +322,7 @@ def _try_fmp_dcf(ticker: str, price: float) -> dict | None:
             "verdict": verdict,
             "margin_of_safety": round((fair_value - current) / fair_value * 100, 1) if fair_value > current else 0.0,
             "reasoning": (
-                f"DCF valuation from Financial Modeling Prep. "
-                f"Fair value ${fair_value:.2f} vs current ${current:.2f}."
+                f"DCF valuation from Financial Modeling Prep. Fair value ${fair_value:.2f} vs current ${current:.2f}."
             ),
             "method": "fmp_dcf",
             "assumptions": None,
