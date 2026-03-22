@@ -15,7 +15,13 @@ interface GrainyGradientProps {
   onTimeUpdate?: (time: number) => void;
 }
 
-const GrainyGradient = forwardRef<THREE.Mesh, GrainyGradientProps>(({ ripples = [], onTimeUpdate }, ref) => {
+interface GrainyGradientHandle {
+  material: THREE.ShaderMaterial | null;
+  uniforms: Record<string, { value: unknown }>;
+  getCurrentTime: () => number;
+}
+
+const GrainyGradient = forwardRef<GrainyGradientHandle, GrainyGradientProps>(({ ripples = [], onTimeUpdate }, ref) => {
   const mesh = useRef<THREE.Mesh>(null)
   const { viewport } = useThree()
 
