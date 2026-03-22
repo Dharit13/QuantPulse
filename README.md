@@ -60,6 +60,8 @@ graph TB
         FINRA["FINRA"]
         EDGAR["EDGAR"]
         UW["Unusual Whales"]
+        Binance["Binance"]
+        CoinGecko["CoinGecko"]
     end
 
     subgraph persistence ["Persistence -- Supabase"]
@@ -96,6 +98,8 @@ graph TB
     FastAPI --> FINRA
     FastAPI --> EDGAR
     FastAPI --> UW
+    FastAPI --> Binance
+    FastAPI --> CoinGecko
 ```
 
 ## Stack
@@ -108,8 +112,8 @@ graph TB
 | Cache / Queue / Pub/Sub | Railway Redis | Three-tier cache, ARQ task broker, WebSocket event bus |
 | Database | Supabase PostgreSQL | 16 tables, Alembic-managed migrations |
 | Auth | Supabase Auth | JWT token verification, feature-flagged |
-| AI | Anthropic Claude | Market summaries, ticker analysis, research enrichment |
-| Data Sources | 9 APIs | yfinance, FMP, Finnhub, Polygon, SteadyAPI, FRED, FINRA, EDGAR, Unusual Whales |
+| AI | Anthropic Claude | Market summaries, ticker analysis, research enrichment, overnight scanner reasoning |
+| Data Sources | 11 APIs | yfinance, FMP, Finnhub, Polygon, SteadyAPI, FRED, FINRA, EDGAR, Unusual Whales, Binance, CoinGecko |
 | Deployment | Railway (from GitHub) | API service + Worker service + Redis addon |
 
 ## What We Are Trying to Achieve
@@ -145,6 +149,29 @@ Institutional direction is detected through options sweep flow (large call/put s
 ### Strategy 5: Overnight Gap Mean Reversion
 
 Overnight gaps between 1-5% revert 60-65% of the time within the first 90 minutes. We filter for non-catalyst gaps, require historical fill rates above 60% per ticker, and gate on VIX < 30.
+
+### AI Overnight Swing Scanner
+
+A separate pure-AI module that bypasses the strategy engines entirely. Instead of hardcoded signal logic, it fetches raw data from 8 APIs (Polygon, FRED, Binance, CoinGecko, SEC EDGAR, FINRA ATS, Fear & Greed Index), computes technical indicators in Python (RSI, Bollinger Bands, ATR, volume ratios), pre-filters for activity, and sends only interesting tickers to Claude for reasoning.
+
+**Architecture:**
+- **Parallel data fetching** (8-worker ThreadPoolExecutor) with retry and exponential backoff
+- **Tiered caching**: FRED 12h, SEC EDGAR 6h, Polygon snapshots 15min
+- **Numeric pre-filter** before Claude: volume spike >1.5x, price move >2%, RSI extremes, Bollinger breakouts, insider filings. Cuts Anthropic API cost 60-70%
+- **Dynamic universe discovery**: Polygon gainers/losers and Binance top movers expand the base watchlist
+- **Live prices**: Polygon snapshot price during market hours, last daily close on weekends
+- **Weekend awareness**: stock picks framed as Monday trades, crypto picks are live immediately
+
+**Prompt engineering** includes cross-asset correlation checks (don't recommend NVDA long + ETH long = doubled risk-off exposure), sector clustering detection, liquidity validation (skip sub-500K volume stocks), confidence calibration rubric, price anchoring (entry must be within 1% of actual price), and anti-fabrication rules for insider data.
+
+**Morning Scorecard** closes the feedback loop:
+- Every BUY pick is logged with actual entry price, scan date, and confidence
+- At 9:35 AM ET the next trading day, a cron job fetches opening prices and computes actual returns
+- Running scorecard: win rate, avg return, W-L record, current streak, confidence calibration by bucket (do 80+ picks actually win more?), sector breakdown
+- Performance summary feeds back into Claude's prompt: *"Your last 7 days: 5/8 won (+1.8% avg). Confidence 80+: 4/5 won. Fintech picks: 1/3 -- reduce exposure."*
+- Claude self-corrects over time based on actual outcomes
+
+**Cost tracking**: every Claude call logs input/output tokens and USD cost. `GET /overnight/history` returns cost summary.
 
 ## Data Flow
 
@@ -291,9 +318,10 @@ Alembic with baseline migration from existing schema. `make migrate` to apply, `
 | Portfolio | `/portfolio` | `GET /state`, `GET /quick-allocate`, `POST /quick-allocate/start`, `GET /quick-allocate/stream` |
 | Sectors | `/sectors` | `GET /recommendations`, `POST /start-recs`, `GET /stream` |
 | Swing | `/swing` | `GET /picks`, `POST /start-scan`, `GET /stream` |
+| Overnight | `/overnight` | `POST /start-scan`, `GET /status`, `GET /stream`, `GET /scorecard`, `POST /check-outcomes`, `GET /history` |
 | Journal | `/journal` | `POST /trades`, `POST /trades/{id}/exit`, `GET /trades/active`, `GET /performance` |
 | AI | `/ai` | `POST /summarize` |
-| News | `/news` | `GET /market` |
+| News | `/news` | `GET /market`, `GET /ticker/{ticker}` |
 | Pipeline | `/pipeline` | `GET /status`, `POST /refresh`, `GET /flow`, `GET /earnings-calendar` |
 | Errors | `/errors` | `GET /recent`, `POST /{id}/resolve`, `POST /report` |
 | Backtest | `/backtest` | `POST /seed`, `GET /status` |
@@ -354,7 +382,7 @@ graph TB
     end
 
     subgraph external ["External"]
-        DataAPIs["9 Data Source APIs"]
+        DataAPIs["11 Data Source APIs"]
         Claude["Anthropic Claude"]
     end
 
@@ -372,15 +400,16 @@ graph TB
 
 ```
 backend/
-  api/            # FastAPI route modules (12 routers + envelope helper)
+  api/            # FastAPI route modules (13 routers + envelope helper)
   adaptive/       # VolContext, thresholds, Kelly, stops, regime calibration
   regime/         # Regime detector, indicators, transitions
   risk/           # Risk manager, VaR, Kelly, correlation, tail hedge
   strategies/     # 5 strategy implementations + BaseStrategy ABC
-  data/           # DataFetcher, cache, universe, rate limiter, 9 source adapters
+  data/           # DataFetcher, cache, universe, rate limiter, 11 source adapters
   signals/        # Cointegration, earnings, revisions, sentiment, DCF
   tracker/        # Trade journal, strategy performance, signal audit, shadow book
-  ai/             # Claude AI integration (market summaries, analysis)
+  ai/             # Claude AI integration (market summaries, analysis, overnight scanner)
+  prompts/        # LLM system prompts (.txt), including overnight_scanner
   alerts/         # Alert dispatcher (ntfy, Slack, SendGrid)
   middleware/     # Auth, error tracking, request logging
   tasks/          # ARQ task queue, TaskState, worker
@@ -395,8 +424,8 @@ backend/
   main.py
 
 frontend-next/
-  src/app/        # Next.js pages (SSR dashboard, client pages)
-  src/components/ # UI components (shadcn, auth gate, error boundary)
+  src/app/        # Next.js pages (dashboard, scanner, swing, overnight, news, invest)
+  src/components/ # UI components (shadcn, auth gate, error boundary, trade cards)
   src/hooks/      # useSSEScan, useWebSocket
   src/lib/        # API client, Supabase client, types, utils
   src/context/    # React context providers
@@ -413,5 +442,7 @@ pyproject.toml    # Python dependencies
 - **Walk-forward backtesting**: rolling train/test windows with transaction costs, statistical validation (Bonferroni correction, bootstrap Sharpe CI, permutation tests)
 - **Paper-trade shadow book**: every signal auto-logged with regime/VIX/ATR context, phantom outcomes tracked daily
 - **Strategy health monitoring**: rolling Sharpe from phantom outcomes, slippage deterioration detection, automatic pause when performance degrades
+- **Overnight scorecard**: automated morning-after outcome checking (9:35 AM ET cron) with win rate, confidence calibration, sector breakdown, streak tracking. Performance memory feeds back into Claude's prompt for self-correction
+- **Cost tracking**: per-scan Claude API token usage and USD cost logging
 - **Backtest CLI**: `python scripts/run_backtest.py --strategy stat_arb --years 3`
 - **Integration tests**: 24 tests covering health, envelope shape, auth, rate limiting, error tracking
