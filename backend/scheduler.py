@@ -315,6 +315,56 @@ def _run_data_cleanup() -> None:
         logger.exception("DataRefresh[cleanup] failed: %s", e)
 
 
+def _run_overnight_scan_stocks() -> None:
+    """Scheduled: run overnight stock scan at 3 PM ET."""
+    from backend.data.sources.overnight_src import DEFAULT_STOCKS, assemble_macro_data, assemble_stock_data
+    from backend.ai.market_ai import ai_overnight_analysis
+    from backend.data.sources.overnight_src import log_scan_result
+    from backend.data.cache import data_cache as _dc
+
+    try:
+        stock_data = assemble_stock_data(DEFAULT_STOCKS)
+        macro_data = assemble_macro_data()
+        analysis = ai_overnight_analysis(stock_data, {}, macro_data)
+        if analysis:
+            log_scan_result(analysis)
+            _dc.set("overnight:last_result", {
+                "analysis": analysis,
+                "timestamp": __import__("datetime").datetime.now(
+                    __import__("datetime").UTC
+                ).isoformat(),
+                "mode": "stocks",
+            }, ttl_hours=4.0)
+            logger.info("Scheduled overnight stock scan complete")
+    except Exception as e:
+        logger.exception("Scheduled overnight stock scan failed: %s", e)
+
+
+def _run_overnight_scan_crypto() -> None:
+    """Scheduled: run overnight crypto scan every 6 hours."""
+    from backend.data.sources.overnight_src import DEFAULT_CRYPTO, assemble_crypto_data, assemble_macro_data
+    from backend.ai.market_ai import ai_overnight_analysis
+    from backend.data.sources.overnight_src import log_scan_result
+    from backend.data.cache import data_cache as _dc
+
+    try:
+        crypto_data = assemble_crypto_data(DEFAULT_CRYPTO)
+        macro_data = assemble_macro_data()
+        analysis = ai_overnight_analysis({}, crypto_data, macro_data)
+        if analysis:
+            log_scan_result(analysis)
+            _dc.set("overnight:last_result", {
+                "analysis": analysis,
+                "timestamp": __import__("datetime").datetime.now(
+                    __import__("datetime").UTC
+                ).isoformat(),
+                "mode": "crypto",
+            }, ttl_hours=4.0)
+            logger.info("Scheduled overnight crypto scan complete")
+    except Exception as e:
+        logger.exception("Scheduled overnight crypto scan failed: %s", e)
+
+
 def register_all_jobs(scheduler: BackgroundScheduler) -> None:
     """Register every job from CALIBRATION_SCHEDULE onto the scheduler."""
 
@@ -395,6 +445,24 @@ def register_all_jobs(scheduler: BackgroundScheduler) -> None:
     # Trade monitoring (not in calibration schedule, but essential)
     scheduler.add_job(_check_trade_alerts, "interval", minutes=15, id="trade_alerts", replace_existing=True)
     scheduler.add_job(_update_phantoms, "cron", hour=18, minute=0, id="phantom_updates", replace_existing=True)
+
+    # Overnight scanner — 3 PM ET for stocks, every 6 hours for crypto
+    scheduler.add_job(
+        _run_overnight_scan_stocks,
+        "cron",
+        hour=15,
+        minute=0,
+        id="overnight_stocks",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_overnight_scan_crypto,
+        "interval",
+        hours=6,
+        id="overnight_crypto",
+        replace_existing=True,
+    )
+    logger.info("Registered overnight scanner jobs: stocks (3 PM daily), crypto (every 6h)")
 
     # Calibration jobs that don't overlap with the pipeline
     pipeline_handled = {

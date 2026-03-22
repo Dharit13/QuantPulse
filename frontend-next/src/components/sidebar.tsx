@@ -10,16 +10,20 @@ import {
   Zap,
   TrendingUp,
   Lightbulb,
+  Newspaper,
+  ScanEye,
   ChevronLeft,
   ChevronRight,
   Menu,
   X,
   Sun,
   Moon,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { checkHealth, apiGet } from "@/lib/api";
 import { useTheme } from "@/components/theme-provider";
+import { getSupabase } from "@/lib/supabase";
 import { GlowingEffect } from "./ui/glowing-effect";
 import type { RegimeData } from "@/lib/types";
 
@@ -29,6 +33,8 @@ const NAV_ITEMS = [
   { href: "/invest", label: "AI Research", icon: Lightbulb },
   { href: "/scanner", label: "Scanner", icon: Radio },
   { href: "/swing-picks", label: "Swing Picks", icon: Zap },
+  { href: "/overnight", label: "Overnight AI", icon: ScanEye },
+  { href: "/news", label: "News", icon: Newspaper },
 ] as const;
 
 const REGIME_COLORS: Record<string, string> = {
@@ -269,6 +275,34 @@ export function Sidebar() {
                 month: "short",
                 day: "numeric",
               })}
+            </div>
+          )}
+
+          {/* Sign out */}
+          {process.env.NEXT_PUBLIC_AUTH_ENABLED === "true" && (
+            <div className="relative rounded-[1rem] border-[0.75px] border-border p-[3px]">
+              <GlowingEffect
+                spread={40}
+                glow
+                disabled={false}
+                proximity={64}
+                inactiveZone={0.01}
+                borderWidth={2}
+              />
+              <button
+                onClick={async () => {
+                  const client = getSupabase();
+                  if (client) await client.auth.signOut();
+                }}
+                className={cn(
+                  "relative flex items-center gap-3 w-full px-3 py-2 rounded-[0.75rem] border-[0.75px] border-border bg-background text-foreground/70 hover:text-destructive text-[14px] cursor-pointer active:scale-[0.98] shadow-sm dark:shadow-[0px_0px_27px_0px_rgba(45,45,45,0.3)] transition-colors",
+                  !showLabels && "justify-center"
+                )}
+                aria-label="Sign out"
+              >
+                <LogOut className="h-[18px] w-[18px] shrink-0" />
+                {showLabels && <span>Sign Out</span>}
+              </button>
             </div>
           )}
 
