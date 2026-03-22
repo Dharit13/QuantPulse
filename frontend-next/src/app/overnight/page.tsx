@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Moon,
   Sun,
@@ -9,6 +9,11 @@ import {
   Bitcoin,
   ChevronDown,
   ChevronUp,
+  Trophy,
+  TrendingUp,
+  TrendingDown,
+  Flame,
+  Clock,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { GradientCard, GradientButton } from "@/components/gradient-card";
@@ -18,6 +23,7 @@ import { PulseLoader } from "@/components/pulse-loader";
 import { CacheAge } from "@/components/cache-age";
 import { Badge } from "@/components/badge";
 import { useSSEScan } from "@/hooks/use-sse-scan";
+import { apiGet, apiPost } from "@/lib/api";
 import type { BadgeVariant } from "@/lib/types";
 
 // ── Types ────────────────────────────────────────────────────
@@ -57,6 +63,42 @@ interface OvernightResult {
 }
 
 type ScanMode = "both" | "stocks" | "crypto";
+
+interface ScorecardData {
+  has_data: boolean;
+  total_picks: number;
+  winners: number;
+  losers: number;
+  win_rate: number;
+  avg_return: number;
+  total_return: number;
+  best_pick?: { symbol: string; return_pct: number; scan_date: string };
+  worst_pick?: { symbol: string; return_pct: number; scan_date: string };
+  streak: string;
+  calibration: Record<string, { total: number; wins: number; win_rate: number; avg_return: number }>;
+  by_type: {
+    stocks: { total: number; wins?: number; win_rate?: number; avg_return?: number };
+    crypto: { total: number; wins?: number; win_rate?: number; avg_return?: number };
+  };
+  recent_picks: Array<{
+    symbol: string;
+    pick_type: string;
+    confidence: number;
+    entry_price: number;
+    exit_price: number;
+    return_pct: number;
+    won: boolean;
+    scan_date: string;
+    sector: string;
+  }>;
+  pending_picks: Array<{
+    symbol: string;
+    pick_type: string;
+    confidence: number;
+    entry_price: number;
+    scan_date: string;
+  }>;
+}
 
 const BIAS_CONFIG: Record<string, { color: string; badge: BadgeVariant }> = {
   bullish: { color: "#34d399", badge: "green" },
@@ -264,16 +306,215 @@ function ModeSelector({
   );
 }
 
+// ── Scorecard ────────────────────────────────────────────────
+
+function Scorecard({ data, onCheckOutcomes }: { data: ScorecardData; onCheckOutcomes: () => void }) {
+  const [showHistory, setShowHistory] = useState(false);
+  const wrColor = data.win_rate >= 55 ? "#00ccb1" : data.win_rate >= 45 ? "#fbbf24" : "#fb7185";
+  const retColor = data.avg_return >= 0 ? "#00ccb1" : "#fb7185";
+
+  return (
+    <GradientCard>
+      <div className="space-y-4">
+        {/* Top stats row */}
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-6">
+            {/* Win rate */}
+            <div className="text-center">
+              <div className="text-[28px] font-black tabular-nums leading-none" style={{ color: wrColor }}>
+                {data.win_rate}%
+              </div>
+              <div className="text-[10px] uppercase tracking-[0.8px] text-foreground/50 font-medium mt-1">
+                Win Rate
+              </div>
+            </div>
+
+            {/* Avg return */}
+            <div className="text-center">
+              <div className="text-[28px] font-black tabular-nums leading-none" style={{ color: retColor }}>
+                {data.avg_return >= 0 ? "+" : ""}{data.avg_return}%
+              </div>
+              <div className="text-[10px] uppercase tracking-[0.8px] text-foreground/50 font-medium mt-1">
+                Avg Return
+              </div>
+            </div>
+
+            {/* Record */}
+            <div className="text-center">
+              <div className="text-[22px] font-bold tabular-nums leading-none text-foreground">
+                {data.winners}W-{data.losers}L
+              </div>
+              <div className="text-[10px] uppercase tracking-[0.8px] text-foreground/50 font-medium mt-1">
+                {data.total_picks} picks
+              </div>
+            </div>
+
+            {/* Streak */}
+            {data.streak && data.streak !== "0" && (
+              <div className="text-center">
+                <div className="flex items-center gap-1">
+                  <Flame className="h-4 w-4" style={{ color: data.streak.includes("W") ? "#00ccb1" : "#fb7185" }} />
+                  <span className="text-[18px] font-bold tabular-nums" style={{ color: data.streak.includes("W") ? "#00ccb1" : "#fb7185" }}>
+                    {data.streak}
+                  </span>
+                </div>
+                <div className="text-[10px] uppercase tracking-[0.8px] text-foreground/50 font-medium mt-1">
+                  Streak
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={onCheckOutcomes}
+            className="text-[11px] font-semibold text-foreground/40 hover:text-foreground/70 transition-colors cursor-pointer flex items-center gap-1"
+          >
+            <Clock className="h-3.5 w-3.5" />
+            Check outcomes
+          </button>
+        </div>
+
+        {/* Confidence calibration */}
+        {Object.keys(data.calibration).length > 0 && (
+          <div className="flex gap-4 flex-wrap">
+            {Object.entries(data.calibration).map(([bucket, stats]) => (
+              <div key={bucket} className="flex items-center gap-2">
+                <span className="text-[11px] text-foreground/40 font-medium">{bucket}:</span>
+                <span
+                  className="text-[12px] font-bold tabular-nums"
+                  style={{ color: stats.win_rate >= 55 ? "#00ccb1" : stats.win_rate >= 45 ? "#fbbf24" : "#fb7185" }}
+                >
+                  {stats.win_rate}% ({stats.wins}/{stats.total})
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* By type */}
+        <div className="flex gap-4 flex-wrap">
+          {data.by_type.stocks.total > 0 && (
+            <div className="flex items-center gap-1.5">
+              <BarChart3 className="h-3.5 w-3.5 text-foreground/40" />
+              <span className="text-[12px] text-foreground/60">
+                Stocks: {data.by_type.stocks.wins}/{data.by_type.stocks.total}
+                {data.by_type.stocks.avg_return !== undefined && (
+                  <span style={{ color: data.by_type.stocks.avg_return >= 0 ? "#00ccb1" : "#fb7185" }}>
+                    {" "}({data.by_type.stocks.avg_return >= 0 ? "+" : ""}{data.by_type.stocks.avg_return}%)
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+          {data.by_type.crypto.total > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Bitcoin className="h-3.5 w-3.5 text-foreground/40" />
+              <span className="text-[12px] text-foreground/60">
+                Crypto: {data.by_type.crypto.wins}/{data.by_type.crypto.total}
+                {data.by_type.crypto.avg_return !== undefined && (
+                  <span style={{ color: data.by_type.crypto.avg_return >= 0 ? "#00ccb1" : "#fb7185" }}>
+                    {" "}({data.by_type.crypto.avg_return >= 0 ? "+" : ""}{data.by_type.crypto.avg_return}%)
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Recent history toggle */}
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="flex items-center gap-1 text-[12px] font-semibold text-foreground/40 hover:text-foreground/70 transition-colors cursor-pointer"
+        >
+          {showHistory ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          {showHistory ? "Hide history" : `Recent picks (${data.recent_picks.length})`}
+          {data.pending_picks.length > 0 && (
+            <Badge variant="amber">{data.pending_picks.length} pending</Badge>
+          )}
+        </button>
+
+        {showHistory && (
+          <div className="space-y-1.5">
+            {data.pending_picks.map((p) => (
+              <div
+                key={`${p.symbol}-${p.scan_date}`}
+                className="flex items-center justify-between px-3 py-2 rounded-lg border border-border bg-background/50"
+              >
+                <div className="flex items-center gap-2">
+                  <Clock className="h-3.5 w-3.5 text-amber-400" />
+                  <span className="text-[13px] font-semibold text-foreground/70">{p.symbol}</span>
+                  <Badge variant="amber">Pending</Badge>
+                </div>
+                <div className="flex items-center gap-3 text-[12px] text-foreground/50">
+                  <span>${p.entry_price}</span>
+                  <span>Conf: {p.confidence}</span>
+                  <span>{p.scan_date}</span>
+                </div>
+              </div>
+            ))}
+            {data.recent_picks.map((p) => (
+              <div
+                key={`${p.symbol}-${p.scan_date}`}
+                className="flex items-center justify-between px-3 py-2 rounded-lg border border-border bg-background/50"
+              >
+                <div className="flex items-center gap-2">
+                  {p.won ? (
+                    <TrendingUp className="h-3.5 w-3.5 text-emerald-400" />
+                  ) : (
+                    <TrendingDown className="h-3.5 w-3.5 text-rose-400" />
+                  )}
+                  <span className="text-[13px] font-semibold text-foreground/70">{p.symbol}</span>
+                  <span
+                    className="text-[12px] font-bold tabular-nums"
+                    style={{ color: p.won ? "#00ccb1" : "#fb7185" }}
+                  >
+                    {p.return_pct >= 0 ? "+" : ""}{p.return_pct}%
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-[12px] text-foreground/50">
+                  <span>${p.entry_price} → ${p.exit_price}</span>
+                  <span>Conf: {p.confidence}</span>
+                  <span>{p.scan_date}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </GradientCard>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────
 
 export default function OvernightPage() {
   const [mode, setMode] = useState<ScanMode>("both");
+  const [scorecard, setScorecard] = useState<ScorecardData | null>(null);
 
   const scan = useSSEScan<OvernightResult>(
     "overnight",
     "/overnight/stream",
     "/overnight/status",
   );
+
+  const fetchScorecard = useCallback(() => {
+    apiGet<ScorecardData>("/overnight/scorecard").then(setScorecard);
+  }, []);
+
+  useEffect(() => {
+    fetchScorecard();
+  }, [fetchScorecard]);
+
+  // Refresh scorecard when scan completes
+  useEffect(() => {
+    if (scan.status === "done") fetchScorecard();
+  }, [scan.status, fetchScorecard]);
+
+  const handleCheckOutcomes = useCallback(() => {
+    apiPost<{ scorecard: ScorecardData }>("/overnight/check-outcomes").then((res) => {
+      if (res?.scorecard) setScorecard(res.scorecard);
+    });
+  }, []);
 
   const result = scan.result;
   const macro = result?.macro_regime;
@@ -315,6 +556,59 @@ export default function OvernightPage() {
         }
       />
 
+
+      {/* Performance scorecard — show if data OR pending picks exist */}
+      {scorecard && (scorecard.has_data || (scorecard.pending_picks?.length > 0)) && (
+        <SlideUp>
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-foreground/60" />
+                <h2 className="text-[16px] font-bold text-foreground">Performance</h2>
+                {scorecard.has_data && (
+                  <Badge variant={scorecard.win_rate >= 55 ? "green" : scorecard.win_rate >= 45 ? "amber" : "red"}>
+                    Last 30 days
+                  </Badge>
+                )}
+                {!scorecard.has_data && scorecard.pending_picks?.length > 0 && (
+                  <Badge variant="amber">
+                    {scorecard.pending_picks.length} pending
+                  </Badge>
+                )}
+              </div>
+              <GradientButton onClick={handleCheckOutcomes}>
+                <Clock className="h-4 w-4" />
+                Check Outcomes
+              </GradientButton>
+            </div>
+            {scorecard.has_data ? (
+              <Scorecard data={scorecard} onCheckOutcomes={handleCheckOutcomes} />
+            ) : (
+              <GradientCard>
+                <div className="space-y-1.5">
+                  {scorecard.pending_picks?.map((p) => (
+                    <div
+                      key={`${p.symbol}-${p.scan_date}`}
+                      className="flex items-center justify-between px-3 py-2 rounded-lg border border-border bg-background/50"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Clock className="h-3.5 w-3.5 text-amber-400" />
+                        <span className="text-[13px] font-semibold text-foreground/70">{p.symbol}</span>
+                        <Badge variant="amber">Pending</Badge>
+                      </div>
+                      <div className="flex items-center gap-3 text-[12px] text-foreground/50">
+                        <span>${p.entry_price}</span>
+                        <span>Conf: {p.confidence}</span>
+                        <span>{p.scan_date}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </GradientCard>
+            )}
+          </div>
+        </SlideUp>
+      )}
 
       {/* Scanning state */}
       {scan.status === "scanning" && (

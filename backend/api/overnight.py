@@ -35,6 +35,8 @@ from backend.data.sources.overnight_src import (
     assemble_crypto_data,
     assemble_macro_data,
     assemble_stock_data,
+    check_morning_outcomes,
+    compute_scorecard,
     get_recent_outcomes,
     log_scan_result,
 )
@@ -69,6 +71,28 @@ _CACHE_TTL_HOURS = 4.0
 def _is_weekend() -> bool:
     """Check if US stock markets are closed (Saturday=5, Sunday=6)."""
     return datetime.now().weekday() >= 5
+
+
+def _inject_entry_prices(analysis: dict, stock_data: dict, crypto_data: dict) -> None:
+    """Stamp each BUY pick with the actual entry_price from the data we sent Claude."""
+    for pick in analysis.get("stock_picks", []):
+        if pick.get("action") != "BUY":
+            continue
+        sym = pick.get("symbol", "")
+        sd = stock_data.get(sym, {})
+        price = sd.get("indicators", {}).get("price")
+        if price:
+            pick["entry_price"] = price
+
+    pairs = crypto_data.get("pairs", {})
+    for pick in analysis.get("crypto_picks", []):
+        if pick.get("action") != "BUY":
+            continue
+        sym = pick.get("symbol", "")
+        cd = pairs.get(sym, {})
+        price = cd.get("indicators", {}).get("price")
+        if price:
+            pick["entry_price"] = price
 
 
 def _run_scan_background(
@@ -137,8 +161,8 @@ def _run_scan_background(
         macro_data = assemble_macro_data()
         _advance(f"Macro data: {len(macro_data)} indicators")
 
-        # 4. Get recent outcomes for performance memory
-        recent = get_recent_outcomes(days=7)
+        # 4. Get recent outcomes for performance memory (now a formatted string)
+        performance_summary = get_recent_outcomes(days=7)
 
         # 5. Send to Claude (with positions, history, computed indicators)
         _scan_state["step"] = "Claude AI analyzing pre-filtered data..."
@@ -147,7 +171,7 @@ def _run_scan_background(
             crypto_data,
             macro_data,
             current_positions=current_positions or None,
-            recent_outcomes=recent or None,
+            performance_summary=performance_summary,
         )
         _advance("AI analysis complete")
 
@@ -159,7 +183,8 @@ def _run_scan_background(
         if market_closed_note:
             analysis["market_closed_note"] = market_closed_note
 
-        # 6. Log results for outcome tracking
+        # 6. Inject entry prices from the data we sent Claude, then log
+        _inject_entry_prices(analysis, stock_data, crypto_data)
         log_scan_result(analysis)
 
         _scan_state["result"] = analysis
@@ -303,10 +328,25 @@ async def stream_overnight_scan():
     )
 
 
+@router.get("/scorecard")
+async def get_scorecard(
+    days: int = Query(default=30, ge=1, le=90, description="Look-back period in days"),
+) -> dict:
+    """Performance scorecard — win rate, calibration, sector breakdown, recent picks."""
+    return ok(compute_scorecard(days=days))
+
+
+@router.post("/check-outcomes")
+async def trigger_outcome_check() -> dict:
+    """Manually trigger morning outcome checking for all pending picks."""
+    resolved = check_morning_outcomes()
+    scorecard = compute_scorecard(days=30)
+    return ok({"resolved": resolved, "scorecard": scorecard})
+
+
 @router.get("/history")
 async def get_scan_history() -> dict:
-    """Return recent scan results and Claude API cost log."""
-    outcomes = get_recent_outcomes(days=30)
+    """Return Claude API cost log."""
     cost_log = data_cache.get("overnight:cost_log") or []
 
     total_cost = sum(e.get("cost_usd", 0) for e in cost_log)
@@ -314,7 +354,6 @@ async def get_scan_history() -> dict:
 
     return ok(
         {
-            "recent_outcomes": outcomes,
             "cost_log": cost_log[-20:],
             "cost_summary": {
                 "total_scans": total_scans,

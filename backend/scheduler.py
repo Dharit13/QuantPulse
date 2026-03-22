@@ -315,6 +315,17 @@ def _run_data_cleanup() -> None:
         logger.exception("DataRefresh[cleanup] failed: %s", e)
 
 
+def _check_overnight_outcomes() -> None:
+    """Scheduled: check morning-after outcomes for overnight picks at 9:35 AM ET."""
+    from backend.data.sources.overnight_src import check_morning_outcomes
+
+    try:
+        resolved = check_morning_outcomes()
+        logger.info("Overnight outcome check: resolved %d picks", resolved)
+    except Exception as e:
+        logger.exception("Overnight outcome check failed: %s", e)
+
+
 def _run_overnight_scan_stocks() -> None:
     """Scheduled: run overnight stock scan at 3 PM ET."""
     from backend.ai.market_ai import ai_overnight_analysis
@@ -474,7 +485,18 @@ def register_all_jobs(scheduler: BackgroundScheduler) -> None:
         id="overnight_crypto",
         replace_existing=True,
     )
-    logger.info("Registered overnight scanner jobs: stocks (3 PM daily), crypto (every 6h)")
+    scheduler.add_job(
+        _check_overnight_outcomes,
+        "cron",
+        hour=9,
+        minute=35,
+        day_of_week="mon-fri",
+        id="overnight_outcomes",
+        replace_existing=True,
+    )
+    logger.info(
+        "Registered overnight scanner jobs: stocks (3 PM daily), crypto (every 6h), outcomes (9:35 AM weekdays)"
+    )
 
     # Calibration jobs that don't overlap with the pipeline
     pipeline_handled = {
