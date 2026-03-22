@@ -44,6 +44,8 @@ dependencies = [
     # Alerts (optional)
     "slack-sdk>=3.27",
     "psycopg2-binary>=2.9.11",
+    # AI
+    "anthropic>=0.39",
 ]
 
 [project.optional-dependencies]
