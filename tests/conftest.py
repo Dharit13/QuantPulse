@@ -1,7 +1,5 @@
 """Shared test fixtures — synthetic market data and VolContext objects."""
 
-from datetime import datetime
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -41,7 +39,7 @@ def spy_df() -> pd.DataFrame:
     """252 trading days of synthetic SPY data with realistic trend."""
     np.random.seed(42)
     n = 252
-    dates = pd.bdate_range(end=datetime.now(), periods=n)
+    dates = pd.bdate_range(end="2026-03-17", periods=n)
     returns = np.random.normal(0.0004, 0.012, n)
     prices = 450 * np.cumprod(1 + returns)
     volume = np.random.randint(50_000_000, 150_000_000, n)
@@ -60,7 +58,7 @@ def vix_df() -> pd.DataFrame:
     """252 trading days of synthetic VIX data."""
     np.random.seed(43)
     n = 252
-    dates = pd.bdate_range(end=datetime.now(), periods=n)
+    dates = pd.bdate_range(end="2026-03-17", periods=n)
     vix = 18 + np.cumsum(np.random.normal(0, 0.5, n))
     vix = np.clip(vix, 10, 80)
     df = pd.DataFrame({
