@@ -781,3 +781,139 @@ def ai_dcf_explain(dcf_data: dict, fundamentals: dict) -> dict | None:
         f"Profit margin: {fundamentals.get('profit_margin', 'N/A')}"
     )
     return _call_claude(_DCF_EXPLAIN_SYSTEM, user, max_tokens=300)
+
+
+# ── News Summary ───────────────────────────────────────────────
+
+_NEWS_SUMMARY_SYSTEM = load_prompt("news_summary")
+
+
+def ai_news_summary(ticker: str, news_items: list[dict]) -> dict | None:
+    """AI briefing from a list of news headlines for a ticker."""
+    if not news_items:
+        return None
+    lines = [
+        f"- {item.get('title', '')} ({item.get('source', '')})"
+        for item in news_items[:15]
+    ]
+    user = f"Ticker: {ticker}\n\nRecent headlines:\n" + "\n".join(lines)
+    return _call_claude(_NEWS_SUMMARY_SYSTEM, user, max_tokens=400)
+
+
+# ── Overnight Swing Scanner ───────────────────────────────────
+
+_OVERNIGHT_SYSTEM = load_prompt("overnight_scanner")
+
+
+def ai_overnight_analysis(
+    stock_data: dict,
+    crypto_data: dict,
+    macro_data: dict,
+    current_positions: list[str] | None = None,
+    recent_outcomes: list[dict] | None = None,
+) -> dict | None:
+    """Send pre-filtered, indicator-enriched market data to Claude.
+
+    Returns structured picks (stocks + crypto) with cost tracking, or None.
+    """
+    from datetime import datetime as _dt
+
+    now = _dt.now()
+
+    sections = [
+        f"Here is today's pre-filtered market data with computed technical indicators.",
+        f"All RSI, Bollinger, volume ratios are pre-calculated — trust them.\n",
+        f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S ET')}",
+        f"Day of week: {now.strftime('%A')}",
+    ]
+
+    if current_positions:
+        sections.append(
+            f"\n=== CURRENT POSITIONS (do NOT recommend these) ===\n"
+            f"{', '.join(current_positions)}"
+        )
+
+    if recent_outcomes:
+        sections.append(
+            f"\n=== RECENT OUTCOMES (last 7 days — learn from these) ===\n"
+            f"{json.dumps(recent_outcomes, indent=1, default=str)}"
+        )
+
+    sections.append(
+        f"\n=== MACRO REGIME DATA (FRED) ===\n"
+        f"{json.dumps(macro_data, indent=1, default=str)}"
+    )
+
+    stock_count = len([k for k in stock_data if not k.startswith("_")])
+    sections.append(
+        f"\n=== STOCK DATA ({stock_count} tickers, pre-filtered for activity) ===\n"
+        f"{json.dumps(stock_data, indent=1, default=str)}"
+    )
+
+    sections.append(
+        f"\n=== CRYPTO DATA ===\n"
+        f"{json.dumps(crypto_data, indent=1, default=str)}"
+    )
+
+    sections.append(
+        "\nAnalyze all data. Find the best overnight swing trades. "
+        "Check cross-asset correlations. Return JSON only."
+    )
+
+    user = "\n".join(sections)
+
+    if len(user) > 180000:
+        user = user[:180000] + "\n\n[DATA TRUNCATED — analyze what's available]"
+
+    # Call Claude with cost tracking
+    result = _call_claude_tracked(_OVERNIGHT_SYSTEM, user, max_tokens=8000)
+    return result
+
+
+def _call_claude_tracked(system: str, user: str, max_tokens: int = 8000) -> dict | None:
+    """Like _call_claude but also logs token usage and cost."""
+    if not settings.anthropic_api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        logger.warning("anthropic package not installed")
+        return None
+    try:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=120.0)
+        resp = client.messages.create(
+            model=_MODEL,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        block = resp.content[0]
+        raw = block.text.strip()
+
+        # Log cost
+        input_tokens = resp.usage.input_tokens
+        output_tokens = resp.usage.output_tokens
+        # Sonnet pricing: $3/M input, $15/M output
+        cost_usd = (input_tokens * 3 + output_tokens * 15) / 1_000_000
+        logger.info(
+            "Overnight AI cost: %d input + %d output tokens = $%.4f",
+            input_tokens, output_tokens, cost_usd,
+        )
+
+        from backend.data.cache import data_cache as _dc
+        cost_log = _dc.get("overnight:cost_log") or []
+        cost_log.append({
+            "timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": round(cost_usd, 4),
+        })
+        _dc.set("overnight:cost_log", cost_log[-100:], ttl_hours=720.0)
+
+        return _extract_json(raw)
+    except json.JSONDecodeError:
+        logger.warning("Overnight AI JSON parse failed")
+        return None
+    except Exception as e:
+        logger.warning("Overnight AI call failed: %s", e)
+        return None

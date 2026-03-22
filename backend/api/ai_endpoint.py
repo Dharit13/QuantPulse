@@ -22,6 +22,8 @@ from backend.ai.market_ai import (
     ai_market_action_banner,
     ai_market_summary,
     ai_market_timing_tip,
+    ai_news_summary,
+    ai_overnight_analysis,
     ai_picks_summary,
     ai_portfolio_review,
     ai_regime_probs,
@@ -112,6 +114,15 @@ async def summarize(req: AISummarizeRequest) -> dict:
         dcf = req.data.get("dcf", {})
         fundamentals = req.data.get("fundamentals", {})
         result = ai_dcf_explain(dcf, fundamentals)
+    elif req.type == "news_summary":
+        ticker = req.data.get("ticker", "")
+        items = req.data.get("items", [])
+        result = ai_news_summary(ticker, items)
+    elif req.type == "overnight":
+        stock_data = req.data.get("stock_data", {})
+        crypto_data = req.data.get("crypto_data", {})
+        macro_data = req.data.get("macro_data", {})
+        result = ai_overnight_analysis(stock_data, crypto_data, macro_data)
 
     if req.type in DASHBOARD_AI_TYPES and result is not None:
         cache_key = _cache_key_for(req.type, req.data)
