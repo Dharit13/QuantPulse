@@ -435,9 +435,9 @@ function Scorecard({ data, onCheckOutcomes }: { data: ScorecardData; onCheckOutc
 
         {showHistory && (
           <div className="space-y-1.5">
-            {data.pending_picks.map((p) => (
+            {data.pending_picks.map((p, idx) => (
               <div
-                key={`${p.symbol}-${p.scan_date}`}
+                key={`${p.symbol}-${p.scan_date}-${idx}`}
                 className="flex items-center justify-between px-3 py-2 rounded-lg border border-border bg-background/50"
               >
                 <div className="flex items-center gap-2">
@@ -452,9 +452,9 @@ function Scorecard({ data, onCheckOutcomes }: { data: ScorecardData; onCheckOutc
                 </div>
               </div>
             ))}
-            {data.recent_picks.map((p) => (
+            {data.recent_picks.map((p, idx) => (
               <div
-                key={`${p.symbol}-${p.scan_date}`}
+                key={`${p.symbol}-${p.scan_date}-${idx}`}
                 className="flex items-center justify-between px-3 py-2 rounded-lg border border-border bg-background/50"
               >
                 <div className="flex items-center gap-2">
@@ -586,9 +586,9 @@ export default function OvernightPage() {
             ) : (
               <GradientCard>
                 <div className="space-y-1.5">
-                  {scorecard.pending_picks?.map((p) => (
+                  {scorecard.pending_picks?.map((p, idx) => (
                     <div
-                      key={`${p.symbol}-${p.scan_date}`}
+                      key={`${p.symbol}-${p.scan_date}-${idx}`}
                       className="flex items-center justify-between px-3 py-2 rounded-lg border border-border bg-background/50"
                     >
                       <div className="flex items-center gap-2">
