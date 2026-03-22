@@ -662,53 +662,305 @@ def discover_crypto_universe(base_pairs: list[str]) -> list[str]:
 
 
 # ────────────────────────────────────────────────────────────
-# RESULT LOGGING — track picks and outcomes
+# RESULT LOGGING + OUTCOME TRACKING + SCORECARD
 # ────────────────────────────────────────────────────────────
 
-_RESULT_LOG_KEY = "overnight:result_log"
-_MAX_LOG_ENTRIES = 60
+_RESULT_LOG_KEY = "overnight:pick_log"
+_MAX_LOG_ENTRIES = 200
 
 
 def log_scan_result(analysis: dict) -> None:
-    """Log scan results for outcome tracking."""
-    history = data_cache.get(_RESULT_LOG_KEY) or []
-
-    entry = {
-        "timestamp": datetime.now(UTC).isoformat(),
-        "stock_picks": [],
-        "crypto_picks": [],
-    }
+    """Log every BUY pick with entry price for morning outcome checking."""
+    raw = data_cache.get(_RESULT_LOG_KEY)
+    history: list[dict] = raw if isinstance(raw, list) else []
+    scan_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    scan_ts = datetime.now(UTC).isoformat()
 
     for pick in analysis.get("stock_picks", []):
-        if pick.get("action") == "BUY":
-            entry["stock_picks"].append(
-                {
-                    "symbol": pick.get("symbol"),
-                    "confidence": pick.get("confidence"),
-                    "expected_move_pct": pick.get("expected_move_pct"),
-                    "entry_strategy": pick.get("entry_strategy"),
-                }
-            )
+        if pick.get("action") != "BUY":
+            continue
+        # Extract entry price from the stock data Claude saw
+        entry_price = pick.get("entry_price") or pick.get("price")
+        history.append(
+            {
+                "symbol": pick.get("symbol"),
+                "confidence": pick.get("confidence", 0),
+                "expected_move_pct": pick.get("expected_move_pct", ""),
+                "sector": pick.get("sector", ""),
+                "entry_price": entry_price,
+                "scan_date": scan_date,
+                "scan_timestamp": scan_ts,
+                "pick_type": "stock",
+                "outcome": None,
+            }
+        )
+
     for pick in analysis.get("crypto_picks", []):
-        if pick.get("action") == "BUY":
-            entry["crypto_picks"].append(
-                {
-                    "symbol": pick.get("symbol"),
-                    "confidence": pick.get("confidence"),
-                    "expected_move_pct": pick.get("expected_move_pct"),
-                }
-            )
+        if pick.get("action") != "BUY":
+            continue
+        entry_price = pick.get("entry_price") or pick.get("price")
+        history.append(
+            {
+                "symbol": pick.get("symbol"),
+                "confidence": pick.get("confidence", 0),
+                "expected_move_pct": pick.get("expected_move_pct", ""),
+                "sector": "",
+                "entry_price": entry_price,
+                "scan_date": scan_date,
+                "scan_timestamp": scan_ts,
+                "pick_type": "crypto",
+                "outcome": None,
+            }
+        )
 
-    history.append(entry)
     history = history[-_MAX_LOG_ENTRIES:]
-    data_cache.set(_RESULT_LOG_KEY, history, ttl_hours=720.0)
+    data_cache.set(_RESULT_LOG_KEY, history, ttl_hours=2160.0)
+    logger.info("Logged %d picks from scan on %s", len(history), scan_date)
 
 
-def get_recent_outcomes(days: int = 7) -> list[dict]:
-    """Get recent scan results for performance memory."""
-    history = data_cache.get(_RESULT_LOG_KEY) or []
-    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-    return [e for e in history if e.get("timestamp", "") >= cutoff]
+def check_morning_outcomes() -> int:
+    """Check actual outcomes for picks that haven't been resolved yet.
+
+    Stocks: fetch today's opening price via Polygon.
+    Crypto: fetch current price via Binance.
+    Returns the number of picks resolved this run.
+    """
+    raw = data_cache.get(_RESULT_LOG_KEY)
+    history: list[dict] = raw if isinstance(raw, list) else []
+    if not history:
+        return 0
+
+    resolved = 0
+    for pick in history:
+        if pick.get("outcome") is not None:
+            continue
+        entry_price = pick.get("entry_price")
+        if not entry_price or entry_price <= 0:
+            pick["outcome"] = {"error": "no_entry_price"}
+            resolved += 1
+            continue
+
+        symbol = pick.get("symbol", "")
+        pick_type = pick.get("pick_type", "stock")
+        exit_price: float | None = None
+
+        if pick_type == "stock":
+            bars = polygon_aggregates(symbol, days=2)
+            if bars and len(bars) >= 1:
+                exit_price = float(bars[-1].get("o", 0))
+        elif pick_type == "crypto":
+            ticker = binance_24h_ticker(symbol)
+            if ticker and ticker.get("lastPrice"):
+                exit_price = float(ticker["lastPrice"])
+
+        if exit_price and exit_price > 0:
+            return_pct = round((exit_price - entry_price) / entry_price * 100, 2)
+            pick["outcome"] = {
+                "exit_price": round(exit_price, 4),
+                "return_pct": return_pct,
+                "won": return_pct > 0,
+                "checked_at": datetime.now(UTC).isoformat(),
+            }
+            resolved += 1
+
+    data_cache.set(_RESULT_LOG_KEY, history, ttl_hours=2160.0)
+    logger.info("Morning outcome check: resolved %d picks", resolved)
+    return resolved
+
+
+def compute_scorecard(days: int = 30) -> dict:
+    """Aggregate all picks with outcomes into performance stats."""
+    raw = data_cache.get(_RESULT_LOG_KEY)
+    history: list[dict] = raw if isinstance(raw, list) else []
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    picks_in_range = [
+        p
+        for p in history
+        if p.get("scan_date", "") >= cutoff and p.get("outcome") and p["outcome"].get("return_pct") is not None
+    ]
+
+    # Pending picks (no outcome yet) — always computed
+    pending = [
+        {
+            "symbol": p.get("symbol"),
+            "pick_type": p.get("pick_type"),
+            "confidence": p.get("confidence"),
+            "entry_price": p.get("entry_price"),
+            "scan_date": p.get("scan_date"),
+        }
+        for p in history
+        if p.get("outcome") is None
+    ]
+
+    if not picks_in_range:
+        return {"total_picks": 0, "has_data": False, "pending_picks": pending}
+
+    returns = [p["outcome"]["return_pct"] for p in picks_in_range]
+    winners = [p for p in picks_in_range if p["outcome"]["won"]]
+    losers = [p for p in picks_in_range if not p["outcome"]["won"]]
+
+    # Best and worst
+    best = max(picks_in_range, key=lambda p: p["outcome"]["return_pct"])
+    worst = min(picks_in_range, key=lambda p: p["outcome"]["return_pct"])
+
+    # Confidence calibration buckets
+    buckets: dict[str, list[dict]] = {"60-74": [], "75-89": [], "90+": []}
+    for p in picks_in_range:
+        c = p.get("confidence", 0)
+        if c >= 90:
+            buckets["90+"].append(p)
+        elif c >= 75:
+            buckets["75-89"].append(p)
+        else:
+            buckets["60-74"].append(p)
+
+    calibration: dict[str, dict] = {}
+    for bucket_name, bucket_picks in buckets.items():
+        if bucket_picks:
+            bucket_wins = [p for p in bucket_picks if p["outcome"]["won"]]
+            bucket_returns = [p["outcome"]["return_pct"] for p in bucket_picks]
+            calibration[bucket_name] = {
+                "total": len(bucket_picks),
+                "wins": len(bucket_wins),
+                "win_rate": round(len(bucket_wins) / len(bucket_picks) * 100, 1),
+                "avg_return": round(sum(bucket_returns) / len(bucket_returns), 2),
+            }
+
+    # Sector breakdown (stocks only)
+    sector_map: dict[str, list[dict]] = {}
+    for p in picks_in_range:
+        if p.get("pick_type") == "stock" and p.get("sector"):
+            sector_map.setdefault(p["sector"], []).append(p)
+    sector_perf: dict[str, dict] = {}
+    for sector, sector_picks in sector_map.items():
+        s_wins = [p for p in sector_picks if p["outcome"]["won"]]
+        s_returns = [p["outcome"]["return_pct"] for p in sector_picks]
+        sector_perf[sector] = {
+            "total": len(sector_picks),
+            "wins": len(s_wins),
+            "win_rate": round(len(s_wins) / len(sector_picks) * 100, 1),
+            "avg_return": round(sum(s_returns) / len(s_returns), 2),
+        }
+
+    # Current streak
+    streak = 0
+    streak_type = ""
+    for p in reversed(picks_in_range):
+        won = p["outcome"]["won"]
+        if not streak_type:
+            streak_type = "W" if won else "L"
+            streak = 1
+        elif (won and streak_type == "W") or (not won and streak_type == "L"):
+            streak += 1
+        else:
+            break
+
+    # Stock vs crypto split
+    stock_picks = [p for p in picks_in_range if p.get("pick_type") == "stock"]
+    crypto_picks = [p for p in picks_in_range if p.get("pick_type") == "crypto"]
+
+    def _split_stats(subset: list[dict]) -> dict:
+        if not subset:
+            return {"total": 0}
+        w = [p for p in subset if p["outcome"]["won"]]
+        r = [p["outcome"]["return_pct"] for p in subset]
+        return {
+            "total": len(subset),
+            "wins": len(w),
+            "win_rate": round(len(w) / len(subset) * 100, 1),
+            "avg_return": round(sum(r) / len(r), 2),
+        }
+
+    # Recent picks list (last 10 with outcomes)
+    recent = []
+    for p in reversed(picks_in_range[-20:]):
+        recent.append(
+            {
+                "symbol": p.get("symbol"),
+                "pick_type": p.get("pick_type"),
+                "confidence": p.get("confidence"),
+                "entry_price": p.get("entry_price"),
+                "exit_price": p["outcome"].get("exit_price"),
+                "return_pct": p["outcome"]["return_pct"],
+                "won": p["outcome"]["won"],
+                "scan_date": p.get("scan_date"),
+                "sector": p.get("sector"),
+            }
+        )
+        if len(recent) >= 15:
+            break
+
+    return {
+        "has_data": True,
+        "days": days,
+        "total_picks": len(picks_in_range),
+        "winners": len(winners),
+        "losers": len(losers),
+        "win_rate": round(len(winners) / len(picks_in_range) * 100, 1),
+        "avg_return": round(sum(returns) / len(returns), 2),
+        "total_return": round(sum(returns), 2),
+        "best_pick": {
+            "symbol": best.get("symbol"),
+            "return_pct": best["outcome"]["return_pct"],
+            "scan_date": best.get("scan_date"),
+        },
+        "worst_pick": {
+            "symbol": worst.get("symbol"),
+            "return_pct": worst["outcome"]["return_pct"],
+            "scan_date": worst.get("scan_date"),
+        },
+        "streak": f"{streak}{streak_type}" if streak_type else "0",
+        "calibration": calibration,
+        "sector_performance": sector_perf,
+        "by_type": {
+            "stocks": _split_stats(stock_picks),
+            "crypto": _split_stats(crypto_picks),
+        },
+        "recent_picks": recent,
+        "pending_picks": pending,
+    }
+
+
+def get_recent_outcomes(days: int = 7) -> str | None:
+    """Format recent outcomes into a Claude-readable performance summary."""
+    scorecard = compute_scorecard(days=days)
+    if not scorecard.get("has_data"):
+        return None
+
+    lines = [
+        f"Your last {days} days: {scorecard['total_picks']} picks total, "
+        f"{scorecard['winners']} won, {scorecard['losers']} lost "
+        f"({scorecard['win_rate']}% win rate, avg return {scorecard['avg_return']:+.2f}%).",
+    ]
+
+    by_type = scorecard.get("by_type", {})
+    stocks = by_type.get("stocks", {})
+    crypto = by_type.get("crypto", {})
+    if stocks.get("total", 0) > 0:
+        lines.append(
+            f"Stocks: {stocks['wins']}/{stocks['total']} won ({stocks['win_rate']}%, avg {stocks['avg_return']:+.2f}%)."
+        )
+    if crypto.get("total", 0) > 0:
+        lines.append(
+            f"Crypto: {crypto['wins']}/{crypto['total']} won ({crypto['win_rate']}%, avg {crypto['avg_return']:+.2f}%)."
+        )
+
+    cal = scorecard.get("calibration", {})
+    for bucket, stats in cal.items():
+        if stats.get("total", 0) >= 2:
+            lines.append(f"Confidence {bucket}: {stats['wins']}/{stats['total']} won ({stats['win_rate']}%).")
+
+    sector_perf = scorecard.get("sector_performance", {})
+    bad_sectors = [
+        f"{s} ({v['wins']}/{v['total']})"
+        for s, v in sector_perf.items()
+        if v.get("total", 0) >= 2 and v.get("win_rate", 100) < 40
+    ]
+    if bad_sectors:
+        lines.append(f"Weak sectors (under 40% win rate): {', '.join(bad_sectors)}. Consider reducing exposure here.")
+
+    return " ".join(lines)
 
 
 # ════════════════════════════════════════════════════════════

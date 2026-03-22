@@ -804,7 +804,7 @@ def ai_overnight_analysis(
     crypto_data: dict,
     macro_data: dict,
     current_positions: list[str] | None = None,
-    recent_outcomes: list[dict] | None = None,
+    performance_summary: str | None = None,
 ) -> dict | None:
     """Send pre-filtered, indicator-enriched market data to Claude.
 
@@ -824,11 +824,8 @@ def ai_overnight_analysis(
     if current_positions:
         sections.append(f"\n=== CURRENT POSITIONS (do NOT recommend these) ===\n{', '.join(current_positions)}")
 
-    if recent_outcomes:
-        sections.append(
-            f"\n=== RECENT OUTCOMES (last 7 days — learn from these) ===\n"
-            f"{json.dumps(recent_outcomes, indent=1, default=str)}"
-        )
+    if performance_summary:
+        sections.append(f"\n=== YOUR TRACK RECORD (learn from these actual results) ===\n{performance_summary}")
 
     sections.append(f"\n=== MACRO REGIME DATA (FRED) ===\n{json.dumps(macro_data, indent=1, default=str)}")
 
