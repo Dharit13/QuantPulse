@@ -170,7 +170,7 @@ app.add_middleware(ErrorTrackingMiddleware)
 app.add_middleware(AuthMiddleware)
 
 # ── CORS ──
-allowed_origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
+allowed_origins = [o.strip().rstrip("/") for o in settings.allowed_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
