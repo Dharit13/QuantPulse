@@ -4,6 +4,7 @@ Revision ID: 002_error_events
 Revises: 001_baseline
 Create Date: 2026-03-21
 """
+
 from collections.abc import Sequence
 
 from alembic import op

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from dateutil import parser as dtparser
 from fastapi import APIRouter
 
 from backend.api.envelope import ok
@@ -15,6 +16,20 @@ logger = logging.getLogger(__name__)
 
 _CACHE_KEY = "news:market_headlines_v2"
 _CACHE_TTL_HOURS = 0.25  # 15 min
+_MAX_AGE = timedelta(hours=24)
+
+
+def _is_recent(published_at: str) -> bool:
+    """Return True if the article was published within the last 24 hours."""
+    if not published_at:
+        return True  # keep items without a date rather than dropping them
+    try:
+        pub = dtparser.parse(published_at)
+        if pub.tzinfo is None:
+            pub = pub.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - pub) <= _MAX_AGE
+    except Exception:
+        return True
 
 
 def _parse_item(raw: dict, ticker: str) -> dict | None:
@@ -43,6 +58,45 @@ def _parse_item(raw: dict, ticker: str) -> dict | None:
     }
 
 
+_MARKET_TICKERS = [
+    # Broad indices
+    "SPY",
+    "QQQ",
+    "DIA",
+    "IWM",
+    "^VIX",
+    # Sector ETFs
+    "XLK",
+    "XLF",
+    "XLE",
+    "XLV",
+    "XLI",
+    "XLC",
+    "XLRE",
+    "XLP",
+    "XLU",
+    "XLB",
+    "XLY",
+    # Mega-cap market movers
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "TSLA",
+    "GOOG",
+    "AMZN",
+    "META",
+    "BRK-B",
+    "JPM",
+    "UNH",
+    "V",
+    "JNJ",
+    "WMT",
+    "MA",
+]
+
+_MAX_ITEMS = 30
+
+
 def _fetch_market_news_full() -> list[dict]:
     """Fetch structured news from yfinance, round-robin across tickers for diversity."""
     buckets: dict[str, list[dict]] = {}
@@ -51,13 +105,15 @@ def _fetch_market_news_full() -> list[dict]:
     try:
         import yfinance as yf
 
-        for ticker in ["SPY", "QQQ", "DIA", "IWM", "^VIX"]:
+        for ticker in _MARKET_TICKERS:
             bucket: list[dict] = []
             try:
                 t = yf.Ticker(ticker)
-                for raw in (t.news or [])[:10]:
+                for raw in (t.news or [])[:6]:
                     item = _parse_item(raw, ticker)
                     if not item or item["title"] in seen:
+                        continue
+                    if not _is_recent(item["published_at"]):
                         continue
                     seen.add(item["title"])
                     bucket.append(item)
@@ -74,9 +130,9 @@ def _fetch_market_news_full() -> list[dict]:
         for bucket in buckets.values():
             if i < len(bucket):
                 items.append(bucket[i])
-            if len(items) >= 20:
+            if len(items) >= _MAX_ITEMS:
                 break
-        if len(items) >= 20:
+        if len(items) >= _MAX_ITEMS:
             break
 
     return items
@@ -93,3 +149,30 @@ async def get_market_news():
         data_cache.set(_CACHE_KEY, items, ttl_hours=_CACHE_TTL_HOURS)
 
     return ok({"items": items})
+
+
+@router.get("/ticker/{ticker}")
+async def get_ticker_news(ticker: str):
+    """News for a specific ticker via yfinance."""
+    ticker = ticker.upper().strip()
+    cache_key = f"news:ticker:{ticker}"
+    cached = data_cache.get(cache_key)
+    if cached is not None:
+        return ok({"items": cached, "ticker": ticker}, cached=True)
+
+    items: list[dict] = []
+    try:
+        import yfinance as yf
+
+        t = yf.Ticker(ticker)
+        for raw in (t.news or [])[:15]:
+            item = _parse_item(raw, ticker)
+            if item and _is_recent(item["published_at"]):
+                items.append(item)
+    except Exception as e:
+        logger.warning("Failed to fetch news for %s: %s", ticker, e)
+
+    if items:
+        data_cache.set(cache_key, items, ttl_hours=_CACHE_TTL_HOURS)
+
+    return ok({"items": items, "ticker": ticker})

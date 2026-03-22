@@ -558,9 +558,7 @@ async def scan_universe(
 
     enriched = _enrich_signals(all_signals, vol, regime)
     filtered = [
-        e for e in enriched
-        if e.signal.signal_score >= min_score
-        and (e.signal.max_hold_days or 0) >= _MIN_HOLD_DAYS
+        e for e in enriched if e.signal.signal_score >= min_score and (e.signal.max_hold_days or 0) >= _MIN_HOLD_DAYS
     ]
     filtered.sort(
         key=lambda e: (e.signal.conviction, e.signal.signal_score),
@@ -674,9 +672,9 @@ def _run_scanner_background(max_signals: int, min_score: float) -> None:
         tracker.start_phase("filter", "Ranking and filtering...")
 
         filtered = [
-            e for e in enriched
-            if e.signal.signal_score >= min_score
-            and (e.signal.max_hold_days or 0) >= _MIN_HOLD_DAYS
+            e
+            for e in enriched
+            if e.signal.signal_score >= min_score and (e.signal.max_hold_days or 0) >= _MIN_HOLD_DAYS
         ]
         filtered.sort(
             key=lambda e: (e.signal.conviction, e.signal.signal_score),

@@ -20,11 +20,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
         regime = data_cache.get("pipeline:regime")
         if regime:
-            await websocket.send_text(json.dumps({
-                "channel": "regime",
-                "event": "current_state",
-                "data": regime,
-            }))
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "channel": "regime",
+                        "event": "current_state",
+                        "data": regime,
+                    }
+                )
+            )
     except Exception:
         pass
 

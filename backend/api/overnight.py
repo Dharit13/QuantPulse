@@ -21,7 +21,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
@@ -45,7 +45,7 @@ _executor = ThreadPoolExecutor(max_workers=2)
 _scan_lock = threading.Lock()
 
 
-class ScanMode(str, Enum):
+class ScanMode(StrEnum):
     both = "both"
     stocks = "stocks"
     crypto = "crypto"
@@ -165,17 +165,22 @@ def _run_scan_background(
         _scan_state["result"] = analysis
         _scan_state["result_timestamp"] = datetime.now(UTC).isoformat()
         _scan_state["status"] = "done"
-        data_cache.set(_CACHE_KEY, {
-            "analysis": analysis,
-            "timestamp": _scan_state["result_timestamp"],
-            "mode": mode,
-        }, ttl_hours=_CACHE_TTL_HOURS)
+        data_cache.set(
+            _CACHE_KEY,
+            {
+                "analysis": analysis,
+                "timestamp": _scan_state["result_timestamp"],
+                "mode": mode,
+            },
+            ttl_hours=_CACHE_TTL_HOURS,
+        )
 
         stock_buys = len([p for p in analysis.get("stock_picks", []) if p.get("action") == "BUY"])
         crypto_buys = len([p for p in analysis.get("crypto_picks", []) if p.get("action") == "BUY"])
         logger.info(
             "Overnight scan complete: %d stock BUYs, %d crypto BUYs",
-            stock_buys, crypto_buys,
+            stock_buys,
+            crypto_buys,
         )
     except Exception as e:
         _scan_state["status"] = "error"
@@ -193,12 +198,14 @@ async def start_overnight_scan(
     """Kick off an overnight scan in the background."""
     with _scan_lock:
         if _scan_state["status"] == "scanning":
-            return ok({
-                "status": "already_scanning",
-                "progress": _scan_state["progress"],
-                "total": _scan_state["total"],
-                "step": _scan_state.get("step", ""),
-            })
+            return ok(
+                {
+                    "status": "already_scanning",
+                    "progress": _scan_state["progress"],
+                    "total": _scan_state["total"],
+                    "step": _scan_state.get("step", ""),
+                }
+            )
 
         _scan_state["status"] = "scanning"
         _scan_state["progress"] = 0
@@ -230,15 +237,18 @@ async def get_scan_status() -> dict:
             result_timestamp = cached.get("timestamp")
             from_cache = True
 
-    return ok({
-        "status": status,
-        "progress": _scan_state["progress"],
-        "total": _scan_state["total"],
-        "step": _scan_state.get("step", ""),
-        "result": result,
-        "result_timestamp": result_timestamp,
-        "error": _scan_state["error"],
-    }, cached=from_cache)
+    return ok(
+        {
+            "status": status,
+            "progress": _scan_state["progress"],
+            "total": _scan_state["total"],
+            "step": _scan_state.get("step", ""),
+            "result": result,
+            "result_timestamp": result_timestamp,
+            "error": _scan_state["error"],
+        },
+        cached=from_cache,
+    )
 
 
 @router.get("/stream")
@@ -302,12 +312,14 @@ async def get_scan_history() -> dict:
     total_cost = sum(e.get("cost_usd", 0) for e in cost_log)
     total_scans = len(cost_log)
 
-    return ok({
-        "recent_outcomes": outcomes,
-        "cost_log": cost_log[-20:],
-        "cost_summary": {
-            "total_scans": total_scans,
-            "total_cost_usd": round(total_cost, 4),
-            "avg_cost_per_scan": round(total_cost / total_scans, 4) if total_scans else 0,
-        },
-    })
+    return ok(
+        {
+            "recent_outcomes": outcomes,
+            "cost_log": cost_log[-20:],
+            "cost_summary": {
+                "total_scans": total_scans,
+                "total_cost_usd": round(total_cost, 4),
+                "avg_cost_per_scan": round(total_cost / total_scans, 4) if total_scans else 0,
+            },
+        }
+    )

@@ -31,6 +31,7 @@ class TaskState:
     def _get_redis(self):
         if not self._checked:
             from backend.redis_client import get_redis
+
             self._redis = get_redis()
             self._checked = True
         return self._redis

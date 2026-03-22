@@ -29,8 +29,7 @@ def _with_retry(fn):
         except Exception as e:
             err_msg = str(e).lower()
             retriable = any(
-                k in err_msg
-                for k in ["timeout", "disconnected", "connection", "reset", "broken pipe", "57014"]
+                k in err_msg for k in ["timeout", "disconnected", "connection", "reset", "broken pipe", "57014"]
             )
             if retriable and attempt < _MAX_RETRIES:
                 reset_client()
@@ -150,9 +149,7 @@ class TradeJournal:
 
     def get_active_trades(self) -> list[TradeEntry]:
         """All trades that have not been exited yet."""
-        result = _with_retry(
-            lambda: get_supabase().table("trades").select("*").is_("exit_date", "null").execute()
-        )
+        result = _with_retry(lambda: get_supabase().table("trades").select("*").is_("exit_date", "null").execute())
         return [self._record_to_entry(r) for r in result.data]
 
     def get_closed_trades(
@@ -174,9 +171,7 @@ class TradeJournal:
         return [self._record_to_entry(r) for r in result.data]
 
     def get_trade(self, trade_id: int) -> TradeEntry | None:
-        result = _with_retry(
-            lambda: get_supabase().table("trades").select("*").eq("id", trade_id).execute()
-        )
+        result = _with_retry(lambda: get_supabase().table("trades").select("*").eq("id", trade_id).execute())
         return self._record_to_entry(result.data[0]) if result.data else None
 
     def get_phantom_trades(

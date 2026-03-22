@@ -37,11 +37,13 @@ async def lifespan(app: FastAPI):
     log = logging.getLogger(__name__)
 
     from backend.websocket.manager import manager
+
     await manager.start_redis_listener()
 
     def _startup_tasks():
         try:
             from backend.data.cache import data_cache
+
             cleared = data_cache.clear_expired()
             if cleared:
                 log.info("Startup: cleared %d expired cache entries", cleared)
@@ -104,13 +106,27 @@ async def lifespan(app: FastAPI):
             from backend.data.cache import data_cache
 
             def _cache_key(req_type: str, data: dict) -> str:
-                fp = {"regime": data.get("regime", ""), "vix": round(data.get("vix", 0), 0), "confidence": round(data.get("confidence", 0), 1)}
+                fp = {
+                    "regime": data.get("regime", ""),
+                    "vix": round(data.get("vix", 0), 0),
+                    "confidence": round(data.get("confidence", 0), 1),
+                }
                 h = hashlib.md5(json.dumps(fp, sort_keys=True).encode()).hexdigest()[:8]
                 return f"ai:{req_type}:{h}"
 
             ai_types = [
                 ("market", ai_market_summary),
-                ("regime_probs", lambda d: ai_regime_probs({"probabilities": d.get("regime_probabilities"), "vix": d.get("vix"), "adx": d.get("adx"), "breadth_pct": d.get("breadth_pct")})),
+                (
+                    "regime_probs",
+                    lambda d: ai_regime_probs(
+                        {
+                            "probabilities": d.get("regime_probabilities"),
+                            "vix": d.get("vix"),
+                            "adx": d.get("adx"),
+                            "breadth_pct": d.get("breadth_pct"),
+                        }
+                    ),
+                ),
                 ("allocation_explain", ai_allocation_explain),
                 ("market_action", ai_market_action_banner),
             ]
@@ -174,10 +190,12 @@ async def health():
     from backend.redis_client import redis_available
     from backend.websocket.manager import manager
 
-    return ok({
-        "status": "ok",
-        "version": "2.0.0",
-        "redis": redis_available(),
-        "ws_clients": manager.client_count,
-        "auth_enabled": settings.auth_enabled,
-    })
+    return ok(
+        {
+            "status": "ok",
+            "version": "2.0.0",
+            "redis": redis_available(),
+            "ws_clients": manager.client_count,
+            "auth_enabled": settings.auth_enabled,
+        }
+    )

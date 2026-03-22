@@ -240,8 +240,7 @@ def refresh_portfolio(
         strategy_pnl = {}
         for s in StrategyName:
             strategy_pnl[s.value] = sum(
-                t.pnl_dollars or 0 for t in all_closed
-                if (t.strategy == s or t.strategy == s.value)
+                t.pnl_dollars or 0 for t in all_closed if (t.strategy == s or t.strategy == s.value)
             )
 
         payload = {
