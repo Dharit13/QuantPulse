@@ -1,4 +1,4 @@
-# QuantPulse v2 — Full Architecture Analysis
+# QuantPulse v3 — Full Architecture Analysis
 
 ## System Topology
 
@@ -41,7 +41,7 @@ graph TB
         Scheduler["APScheduler<br/>2m-weekly jobs"]
         ARQWorker["ARQ Task Queue<br/>retry, timeout, persistence"]
         AlertDispatch["Alert Dispatcher<br/>ntfy, Slack, SendGrid"]
-        AIEngine["Claude AI<br/>market summaries, analysis"]
+        AIEngine["Claude AI<br/>market summaries, analysis,<br/>overnight scanner"]
     end
 
     subgraph infra ["Infrastructure — Railway"]
@@ -58,6 +58,8 @@ graph TB
         FINRA["FINRA ATS"]
         EDGAR["SEC EDGAR"]
         UW["Unusual Whales"]
+        Binance["Binance (free)"]
+        CoinGecko["CoinGecko (free)"]
     end
 
     subgraph persistence ["Persistence — Supabase"]
@@ -94,6 +96,8 @@ graph TB
     FastAPI --> FINRA
     FastAPI --> EDGAR
     FastAPI --> UW
+    FastAPI --> Binance
+    FastAPI --> CoinGecko
 ```
 
 ---
@@ -159,6 +163,8 @@ graph LR
         Invest["/invest"]
         Scanner["/scanner"]
         SwingPicks["/swing-picks"]
+        OvernightAI["/overnight"]
+        News["/news"]
     end
 
     subgraph middlewareStack ["Middleware Stack"]
@@ -175,6 +181,7 @@ graph LR
         SwingAPI["/swing/*"]
         AnalyzeAPI["/analyze/*"]
         PortfolioAPI["/portfolio/*"]
+        OvernightAPI["/overnight/*"]
         SectorsAPI["/sectors/*"]
         JournalAPI["/journal/*"]
         NewsAPI["/news/*"]
@@ -190,6 +197,8 @@ graph LR
     Invest --> middlewareStack
     Scanner --> middlewareStack
     SwingPicks --> middlewareStack
+    OvernightAI --> middlewareStack
+    News --> middlewareStack
     middlewareStack --> apiRoutes
 ```
 
@@ -205,8 +214,8 @@ graph LR
 | Cache / Queue / Pub/Sub | Railway Redis | Three-tier cache, ARQ task broker, WebSocket event bus |
 | Database | Supabase PostgreSQL | 16 tables, Alembic-managed migrations |
 | Auth | Supabase Auth | JWT token verification, feature-flagged |
-| AI | Anthropic Claude | Market summaries, ticker analysis, research enrichment |
-| Data Sources | 9 APIs | yfinance, FMP, Finnhub, Polygon, SteadyAPI, FRED, FINRA, EDGAR, Unusual Whales |
+| AI | Anthropic Claude | Market summaries, ticker analysis, research enrichment, overnight scanner reasoning |
+| Data Sources | 11 APIs | yfinance, FMP, Finnhub, Polygon, SteadyAPI, FRED, FINRA, EDGAR, Unusual Whales, Binance, CoinGecko |
 | Deployment | Railway (from GitHub) | API service + Worker service + Redis addon |
 
 ---
@@ -243,6 +252,9 @@ The main dashboard (`/`) uses Next.js server components to fetch regime and news
 **10. Pydantic Everywhere + AI-Augmented Analysis**
 Config, data models, and API schemas all use Pydantic. Claude integration for market summaries, ticker picking, and research enrichment adds a qualitative layer on top of quantitative signals.
 
+**11. AI Overnight Swing Scanner with Feedback Loop**
+Separate module that bypasses hardcoded strategy logic entirely. Fetches raw data from 8 APIs in parallel (8-worker ThreadPoolExecutor with retry/backoff), computes RSI/Bollinger/ATR/volume in Python, pre-filters to cut token cost 60-70%, discovers dynamic movers via Polygon gainers/losers and Binance top movers, then sends only interesting tickers to Claude for pure reasoning. Prompt includes cross-asset correlation checks, sector clustering detection, liquidity validation, confidence calibration, and anti-fabrication rules. Morning-after scorecard (9:35 AM cron) automatically checks outcomes against actual opening prices, computes win rate/calibration/streaks, and feeds real performance data back into Claude's prompt for self-correction. Tiered caching (FRED 12h, SEC 6h, snapshots 15min) minimizes API calls. Cost tracking logs every Claude call's token usage and USD cost.
+
 ---
 
 ## Previously Identified Cons -- Resolution Status
@@ -267,6 +279,8 @@ Config, data models, and API schemas all use Pydantic. Claude integration for ma
 | **Error Tracking** | Supabase `error_events` table | Middleware captures unhandled exceptions with stack traces, deduplicates by type+message, tracks occurrence counts. `/api/v1/errors/recent` endpoint for viewing. Frontend error boundary reports to same table. |
 | **Structured Logging** | JSON to stdout (Railway native) | Every log line is JSON with `ts`, `level`, `logger`, `msg`, `request_id`, `duration_ms`, `strategy`. Searchable in Railway's log viewer. |
 | **WebSocket Support** | Redis pub/sub + FastAPI WebSocket | Three channels: `ws:regime`, `ws:signals`, `ws:pipeline`. Worker publishes events, API broadcasts to connected clients. Auto-reconnect on frontend. |
+| **Overnight Scorecard** | Cache-based pick logging + Polygon/Binance outcome checks | Every BUY pick logged with entry price; 9:35 AM cron fetches opening prices and computes actual P&L. Win rate, confidence calibration, sector breakdown, streaks. Performance summary auto-injected into Claude's prompt. |
+| **Cost Tracking** | Per-scan token + USD logging | Every Claude API call logs input/output tokens and estimated cost. `GET /overnight/history` returns rolling cost summary. |
 | **Makefile** | Common commands | `make run`, `make worker`, `make dev`, `make test`, `make lint`, `make migrate`, `make install` |
 
 ---
@@ -300,8 +314,8 @@ graph TB
     end
 
     subgraph external ["External (data only)"]
-        DataAPIs["9 Data Source APIs<br/>yfinance, FMP, Finnhub,<br/>Polygon, SteadyAPI, FRED,<br/>FINRA, EDGAR, Unusual Whales"]
-        Claude["Anthropic Claude<br/>AI analysis"]
+        DataAPIs["11 Data Source APIs<br/>yfinance, FMP, Finnhub, Polygon,<br/>SteadyAPI, FRED, FINRA, EDGAR,<br/>Unusual Whales, Binance, CoinGecko"]
+        Claude["Anthropic Claude<br/>AI analysis + overnight scanner"]
     end
 
     APIService <-->|"tasks + cache + pub/sub"| RedisAddon
@@ -360,3 +374,8 @@ graph TB
 | WebSocket hook | `frontend-next/src/hooks/use-websocket.ts` |
 | SSR dashboard | `frontend-next/src/app/page.tsx` |
 | Dashboard client | `frontend-next/src/app/dashboard-client.tsx` |
+| Overnight scanner API | `backend/api/overnight.py` |
+| Overnight data sources | `backend/data/sources/overnight_src.py` |
+| Overnight scanner prompt | `backend/prompts/overnight_scanner.txt` |
+| Overnight scanner page | `frontend-next/src/app/overnight/page.tsx` |
+| News page | `frontend-next/src/app/news/page.tsx` |
