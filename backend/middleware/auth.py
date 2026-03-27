@@ -14,8 +14,8 @@ from typing import Any
 
 import httpx
 import jwt
-from jwt.algorithms import RSAAlgorithm
 from fastapi import Request, Response
+from jwt.algorithms import RSAAlgorithm
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from backend.config import settings
