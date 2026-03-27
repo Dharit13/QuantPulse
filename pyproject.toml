@@ -36,6 +36,7 @@ dependencies = [
     "lxml>=5.2",
     # Auth
     "PyJWT>=2.8",
+    "cryptography>=42.0",
     # Rate Limiting
     "slowapi>=0.1.9",
     # Migrations
