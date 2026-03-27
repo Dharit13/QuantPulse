@@ -30,7 +30,7 @@ _JWKS_FETCHED_AT: float = 0.0
 _JWKS_TTL: float = 3600.0  # 1 hour
 
 # Derived from the Supabase project URL in settings.
-_JWKS_URL = "https://xrsspsuiyzgyjaqrcbrc.supabase.co/.well-known/jwks.json"
+_JWKS_URL = "https://xrsspsuiyzgyjaqrcbrc.supabase.co/auth/v1/.well-known/jwks.json"
 
 
 async def _get_jwks() -> dict[str, Any]:
