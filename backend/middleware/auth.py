@@ -6,7 +6,10 @@ and attaches user_id to request.state.
 """
 
 import logging
+import time
+from typing import Any
 
+import httpx
 import jwt
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
