@@ -2,6 +2,20 @@
 
 QuantPulse is a full-stack signal-generation and decision-support system for quantitative equity trading. It does **not** place trades, connect to brokers, or move money. It is a human-in-the-loop advisory cockpit: the system generates high-conviction trade ideas backed by math, and the human decides what to execute.
 
+## Design Philosophy
+
+QuantPulse is built on three principles:
+
+1. **No hardcoded thresholds.** Every parameter is a function of market regime and volatility context. The system adapts to low-vol vs crisis environments automatically — the operator doesn't manually tune.
+
+2. **Defense-in-depth.** Six independent safety layers (per-trade stops, strategy circuit breakers, conservative position sizing, portfolio exposure caps, regime-aware allocation, human execution gate) ensure no single failure causes catastrophic loss. The same philosophy as building safe AI systems.
+
+3. **Human-in-the-loop.** The system generates high-conviction signals with supporting evidence. The human decides what to execute. Advisory, not autonomous — until the track record justifies more.
+
+See [SAFETY.md](SAFETY.md) for the full risk architecture, [decisions/](decisions/) for the reasoning behind key design choices, and [LESSONS.md](LESSONS.md) for what v4 would look like.
+
+---
+
 ## System Architecture
 
 ```mermaid
