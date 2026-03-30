@@ -99,6 +99,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
     const { error } = await client.auth.signInWithOAuth({
       provider: "github",
+      options: {
+        redirectTo: window.location.origin,
+      },
     });
 
     if (error) {
